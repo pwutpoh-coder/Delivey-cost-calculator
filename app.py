@@ -1,0 +1,505 @@
+%%writefile app.py
+import streamlit as st
+import pandas as pd
+import folium
+from streamlit_folium import st_folium
+from geopy.geocoders import ArcGIS
+import requests
+import json
+import os
+
+# ตั้งค่าหน้าเว็บ
+st.set_page_config(page_title="ระบบคำนวณค่าขนส่งถัง", layout="wide")
+st.title("🚚 แพลตฟอร์มคำนวณค่าขนส่งและวางแผนเส้นทาง")
+
+# Initialize geolocator
+geolocator = ArcGIS(timeout=10)
+HISTORY_FILE = "history_data.json"
+
+# --- ฟังก์ชันจัดการไฟล์ JSON บันทึก/โหลด ประวัติ ---
+def load_history():
+    if os.path.exists(HISTORY_FILE):
+        try:
+            with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def save_history(data):
+    with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+
+# --- ฟังก์ชันแปลงพิกัดกลับเป็นชื่อสถานที่ (Reverse Geocoding) ---
+@st.cache_data(ttl=86400)
+def reverse_geocode(lat, lon):
+    try:
+        location = geolocator.reverse(f"{lat}, {lon}")
+        if location and location.raw:
+            address = location.raw.get('address', {})
+            district = address.get('Neighborhood') or address.get('City') or ""
+            subregion = address.get('Subregion') or ""
+            region = address.get('Region') or ""
+            
+            if "Bangkok" in region or "กรุงเทพ" in region:
+                sub_txt = f"แขวง{district}" if district else ""
+                district_txt = f"เขต{subregion}" if subregion else ""
+                province_txt = "กรุงเทพมหานคร"
+            else:
+                sub_txt = f"ต.{district}" if district else ""
+                district_txt = f"อ.{subregion}" if subregion else ""
+                province_txt = f"จ.{region}" if region else ""
+
+            parts = [p for p in [sub_txt, district_txt, province_txt] if p]
+            if parts:
+                return " ".join(parts)
+            return location.address
+    except Exception:
+        pass
+    return f"{lat:.4f}, {lon:.4f}"
+
+# --- ฟังก์ชันแปลงชื่อ/พิกัด เป็น (lat, lon) และคืนค่าชื่อสถานที่ ---
+@st.cache_data(ttl=86400)
+def parse_and_resolve_location(text_input):
+    text = text_input.strip()
+    if not text:
+        return None, ""
+    
+    if "," in text:
+        try:
+            parts = text.split(",")
+            lat = float(parts[0].strip())
+            lon = float(parts[1].strip())
+            readable_name = reverse_geocode(lat, lon)
+            return (lat, lon), readable_name
+        except ValueError:
+            pass
+
+    try:
+        location = geolocator.geocode(text)
+        if location:
+            return (location.latitude, location.longitude), text
+    except Exception:
+        pass
+    return None, text
+
+# --- ฟังก์ชันคำนวณระยะทางและเส้นทางหลายจุด (Multi-stop Routing) ---
+def get_multi_stop_route(coords_list):
+    if len(coords_list) < 2:
+        return 0.0, []
+    
+    loc_str = ";".join([f"{c[1]},{c[0]}" for c in coords_list])
+    try:
+        osrm_url = f"http://router.project-osrm.org/route/v1/driving/{loc_str}?overview=full&geometries=geojson"
+        response = requests.get(osrm_url, timeout=10)
+        data = response.json()
+        
+        if "routes" in data and len(data["routes"]) > 0:
+            distance_meters = data["routes"][0]["distance"]
+            distance_km = round(distance_meters / 1000.0, 2)
+            geometry = data["routes"][0]["geometry"]["coordinates"]
+            route_points = [[point[1], point[0]] for point in geometry]
+            return distance_km, route_points
+    except Exception:
+        pass
+    return 0.0, []
+
+# โหลดประวัติที่มีอยู่
+history_dict = load_history()
+
+# --- ส่วนจัดการประวัติและเซฟข้อมูล (Sidebar - Top) ---
+st.sidebar.header("📁 จัดการและบันทึกประวัติ")
+
+# เลือกโหลดประวัติ
+selected_preset_name = st.sidebar.selectbox(
+    "📂 เลือกรายการที่เคยบันทึกไว้", 
+    options=["-- เลือกรายการเพื่อโหลด --"] + list(history_dict.keys())
+)
+
+loaded_data = None
+if selected_preset_name != "-- เลือกรายการเพื่อโหลด --":
+    loaded_data = history_dict.get(selected_preset_name)
+    st.sidebar.success(f"โหลดข้อมูล '{selected_preset_name}' เรียบร้อยแล้ว")
+
+col_save, col_del = st.sidebar.columns(2)
+if loaded_data and col_del.button("🗑️ ลบรายการนี้", use_container_width=True):
+    del history_dict[selected_preset_name]
+    save_history(history_dict)
+    st.sidebar.warning(f"ลบรายการ '{selected_preset_name}' แล้ว")
+    st.rerun()
+
+st.sidebar.markdown("---")
+
+# --- ส่วนที่ 1: แถบข้างสำหรับกรอกข้อมูลและตั้งค่า (Sidebar) ---
+st.sidebar.header("⚙️ กำหนดค่าและปัจจัยการคำนวณ")
+
+# 1.1 จุดต้นทาง
+st.sidebar.subheader("📍 จุดต้นทาง (คลัง/ศูนย์กระจายสินค้า)")
+default_raw_origin = loaded_data.get("raw_origin", "13.7563, 100.5018") if loaded_data else "13.7563, 100.5018"
+raw_origin = st.sidebar.text_input("พิกัด/ชื่อสถานที่ต้นทาง", default_raw_origin)
+loc_origin, origin_display = parse_and_resolve_location(raw_origin)
+if "," in raw_origin and loc_origin:
+    st.sidebar.caption(f"📍 แปลงเป็น: **{origin_display}**")
+
+# 1.2 กำหนดจำนวนจุดปลายทาง/จุดส่ง และ เงื่อนไขราคาจุดส่งเพิ่ม
+st.sidebar.subheader("📍 จุดจัดส่งปลายทาง")
+default_num_dest = loaded_data.get("num_destinations", 1) if loaded_data else 1
+num_destinations = st.sidebar.number_input("จำนวนจุดจัดส่งปลายทางทั้งหมด (จุด)", min_value=1, value=int(default_num_dest), step=1)
+
+st.sidebar.markdown("**⚙️ ตั้งค่าเงื่อนไขราคาจุดส่งเพิ่ม**")
+
+default_start_stop = 2 if num_destinations > 1 else 1
+if loaded_data and "start_fee_from_stop" in loaded_data:
+    default_start_stop = min(int(loaded_data["start_fee_from_stop"]), max(1, int(num_destinations)))
+
+start_fee_from_stop = st.sidebar.number_input(
+    "เริ่มคิดราคาเพิ่มตั้งแต่จุดส่งที่เท่าไรขึ้นไป?", 
+    min_value=1, 
+    max_value=max(1, int(num_destinations)), 
+    value=default_start_stop, 
+    step=1
+)
+
+default_extra_fee_val = loaded_data.get("default_extra_fee_amount", 500.0) if loaded_data else 500.0
+default_extra_fee_amount = st.sidebar.number_input("อัตราค่าบริการเพิ่มมาตรฐานต่อจุด (บาท)", min_value=0.0, value=float(default_extra_fee_val), step=100.0, format="%.2f")
+
+destinations_data = []
+all_coords = [loc_origin] if loc_origin else []
+total_extra_stop_fee = 0.0
+
+st.sidebar.markdown("---")
+
+saved_dest_list = loaded_data.get("destinations", []) if loaded_data else []
+
+for j in range(int(num_destinations)):
+    stop_num = j + 1
+    st.sidebar.markdown(f"**📍 จุดส่งที่ {stop_num}**")
+    
+    if stop_num >= start_fee_from_stop and num_destinations > 1:
+        calculated_default_fee = default_extra_fee_amount
+        fee_label_suffix = f" (เข้าเงื่อนไขตั้งแต่งานจุดที่ {start_fee_from_stop})"
+    else:
+        calculated_default_fee = 0.0
+        fee_label_suffix = f" (ฟรี/รวมในค่าขนส่งหลัก)"
+
+    if j < len(saved_dest_list):
+        default_val = saved_dest_list[j].get("raw", "")
+        saved_fee = saved_dest_list[j].get("stop_fee", calculated_default_fee)
+    else:
+        if j == 0:
+            default_val = "13.3611, 100.9847"
+        elif j == 1:
+            default_val = "12.9236, 100.8825"
+        else:
+            default_val = "12.6813, 101.2371"
+        saved_fee = calculated_default_fee
+
+    raw_dest = st.sidebar.text_input(f"พิกัด/ชื่อจุดส่งที่ {stop_num}", default_val, key=f"dest_input_{j}")
+    stop_fee = st.sidebar.number_input(
+        f"ค่าบริการเพิ่มจุดที่ {stop_num} (บาท){fee_label_suffix}", 
+        min_value=0.0, 
+        value=float(saved_fee), 
+        step=100.0, 
+        format="%.2f",
+        key=f"stop_fee_{j}"
+    )
+    
+    loc_dest, dest_display = parse_and_resolve_location(raw_dest)
+    if "," in raw_dest and loc_dest:
+        st.sidebar.caption(f"📍 แปลงเป็น: **{dest_display}**")
+    
+    if loc_dest:
+        all_coords.append(loc_dest)
+    
+    destinations_data.append({
+        "index": stop_num,
+        "raw": raw_dest,
+        "coord": loc_dest,
+        "display": dest_display,
+        "stop_fee": float(stop_fee),
+        "is_charged": stop_num >= start_fee_from_stop
+    })
+    total_extra_stop_fee += float(stop_fee)
+
+# 1.3 รถและการมอบหมายจุดส่ง
+st.sidebar.subheader("🚚 เงื่อนไขการขนส่งและประเภทรถ")
+default_num_trucks = loaded_data.get("num_trucks", 1) if loaded_data else 1
+num_trucks = st.sidebar.number_input("จำนวนรถที่ใช้ (คัน)", min_value=1, value=int(default_num_trucks), step=1)
+
+saved_trucks_list = loaded_data.get("trucks", []) if loaded_data else []
+
+truck_details = []
+total_base_trip_cost = 0.0
+
+for i in range(int(num_trucks)):
+    st.sidebar.markdown(f"**🚛 คันที่ {i+1}**")
+    
+    default_truck_type = saved_trucks_list[i].get("type", "รถกระบะ 4 ล้อ") if i < len(saved_trucks_list) else "รถกระบะ 4 ล้อ"
+    default_truck_cost = saved_trucks_list[i].get("cost", 1500.0) if i < len(saved_trucks_list) else 1500.0
+    
+    type_options = ["รถกระบะ 4 ล้อ", "รถ 6 ล้อ", "รถ 10 ล้อ"]
+    type_index = type_options.index(default_truck_type) if default_truck_type in type_options else 0
+
+    t_type = st.sidebar.selectbox(f"ประเภทรถ (คันที่ {i+1})", type_options, index=type_index, key=f"truck_type_{i}")
+    t_cost = st.sidebar.number_input(f"ค่าขนส่งพื้นฐาน (คันที่ {i+1}) [บาท]", min_value=0.0, value=float(default_truck_cost), step=100.0, format="%.2f", key=f"truck_cost_{i}")
+    
+    assigned_stops = st.sidebar.multiselect(
+        f"จุดส่งที่รถคันที่ {i+1} วิ่งส่ง",
+        options=[f"จุดส่งที่ {d['index']}: {d['display']}" for d in destinations_data],
+        default=[f"จุดส่งที่ {d['index']}: {d['display']}" for d in destinations_data] if num_trucks == 1 else [],
+        key=f"truck_stops_{i}"
+    )
+    
+    stops_count = len(assigned_stops)
+    truck_details.append(f"{t_type} ({t_cost:,.2f} ฿ - วิ่ง {stops_count} จุด)")
+    total_base_trip_cost += float(t_cost)
+
+# 1.4 คำนวณระยะทางรวมอัตโนมัติ
+if len(all_coords) >= 2 and all(c is not None for c in all_coords):
+    auto_distance_km, route_points = get_multi_stop_route(all_coords)
+else:
+    auto_distance_km, route_points = 0.0, []
+
+st.sidebar.subheader("📏 เงื่อนไขระยะทาง")
+distance_km = st.sidebar.number_input(
+    "ระยะทางรวมคำนวณอัตโนมัติ (กิโลเมตร)", 
+    min_value=0.0, 
+    value=float(auto_distance_km), 
+    step=1.0,
+    format="%.2f"
+)
+
+# เลือกรูปแบบการคิดระยะทาง
+dist_options = [
+    "ไม่อิงจากระยะทาง (คิดเหมา)",
+    "อิงจากระยะทาง - คิดตั้งแต่กิโลเมตรแรก",
+    "อิงจากระยะทาง - เหมาช่วงแรก เกินคิดเพิ่มต่อกิโลเมตร"
+]
+
+default_dist_mode = loaded_data.get("use_distance_cost", "ไม่อิงจากระยะทาง (คิดเหมา)") if loaded_data else "ไม่อิงจากระยะทาง (คิดเหมา)"
+dist_index = dist_options.index(default_dist_mode) if default_dist_mode in dist_options else 0
+
+use_distance_cost = st.sidebar.radio(
+    "การคิดค่าขนส่งตามระยะทาง",
+    dist_options,
+    index=dist_index
+)
+
+base_free_km = 0.0
+cost_per_km = 0.0
+distance_cost = 0.0
+distance_detail_str = ""
+
+if use_distance_cost == "อิงจากระยะทาง - คิดตั้งแต่กิโลเมตรแรก":
+    default_cost_per_km = loaded_data.get("cost_per_km", 10.0) if loaded_data else 10.0
+    cost_per_km = st.sidebar.number_input("อัตราค่าขนส่ง (บาท / กิโลเมตร)", min_value=0.0, value=float(default_cost_per_km), step=0.5, format="%.2f")
+    distance_cost = distance_km * cost_per_km
+    distance_detail_str = f"ค่าระยะทางรวม ({distance_km:,.2f} กม. x {cost_per_km:,.2f} บาท/กม.)"
+
+elif use_distance_cost == "อิงจากระยะทาง - เหมาช่วงแรก เกินคิดเพิ่มต่อกิโลเมตร":
+    default_free_km = loaded_data.get("base_free_km", 50.0) if loaded_data else 50.0
+    default_cost_per_km = loaded_data.get("cost_per_km", 10.0) if loaded_data else 10.0
+    
+    base_free_km = st.sidebar.number_input("เหมาฟรีช่วงแรกระยะทางไม่เกิน (กิโลเมตร)", min_value=0.0, value=float(default_free_km), step=5.0, format="%.2f")
+    cost_per_km = st.sidebar.number_input(f"ส่วนที่เกินกว่า {base_free_km:,.2f} กม. คิดเพิ่ม (บาท / กิโลเมตร)", min_value=0.0, value=float(default_cost_per_km), step=0.5, format="%.2f")
+    
+    extra_km = max(0.0, distance_km - base_free_km)
+    distance_cost = extra_km * cost_per_km
+    distance_detail_str = f"ค่าระยะทางส่วนเกิน (รวม {distance_km:,.2f} กม. - เหมาฟรี {base_free_km:,.2f} กม. = เกิน {extra_km:,.2f} กม. x {cost_per_km:,.2f} ฿/กม.)"
+
+else:
+    distance_cost = 0.0
+    distance_detail_str = f"ค่าระยะทางรวม ({distance_km:,.2f} กม. - คิดเหมา)"
+
+# 1.5 รายละเอียดค่าแรงเด็กยก
+st.sidebar.subheader("👷 รายละเอียดค่าแรงและสวัสดิการเด็กยก")
+default_laborers = loaded_data.get("num_laborers", 2) if loaded_data else 2
+num_laborers = st.sidebar.number_input("จำนวนเด็กยกทั้งหมด (คน)", min_value=0, value=int(default_laborers), step=1)
+
+if num_laborers > 0:
+    b_wage = loaded_data.get("base_wage", 300.0) if loaded_data else 300.0
+    e_fee = loaded_data.get("early_morning_fee", 50.0) if loaded_data else 50.0
+    d_allow = loaded_data.get("diligence_allowance", 50.0) if loaded_data else 50.0
+    s_fee = loaded_data.get("sso_company_fee", 30.0) if loaded_data else 30.0
+
+    base_wage = st.sidebar.number_input("1. ค่าแรงพื้นฐาน (บาท/คน)", min_value=0.0, value=float(b_wage), step=50.0, format="%.2f")
+    early_morning_fee = st.sidebar.number_input("2. ค่าออกเช้า (บาท/คน)", min_value=0.0, value=float(e_fee), step=10.0, format="%.2f")
+    diligence_allowance = st.sidebar.number_input("3. ค่าเบี้ยขยัน (บาท/คน)", min_value=0.0, value=float(d_allow), step=10.0, format="%.2f")
+    sso_company_fee = st.sidebar.number_input("4. ค่า บ.ส่ง ประกันสังคม (บาท/คน)", min_value=0.0, value=float(s_fee), step=5.0, format="%.2f")
+else:
+    base_wage = early_morning_fee = diligence_allowance = sso_company_fee = 0.0
+
+cost_per_laborer = base_wage + early_morning_fee + diligence_allowance + sso_company_fee
+total_labor_cost = cost_per_laborer * num_laborers
+
+st.sidebar.subheader("📦 จำนวนสินค้าและค่ายก")
+default_lifting_fee = loaded_data.get("lifting_fee_per_tank", 15.0) if loaded_data else 15.0
+default_num_tanks = loaded_data.get("num_tanks", 100) if loaded_data else 100
+
+lifting_fee_per_tank = st.sidebar.number_input("ค่ายกต่อถัง (บาท)", min_value=0.0, value=float(default_lifting_fee), step=1.0, format="%.2f")
+num_tanks = st.sidebar.number_input("จำนวนถังที่ส่งทั้งหมด (ถัง)", min_value=1, value=int(default_num_tanks), step=10)
+
+# 1.6 ตั้งค่าการแสดงผลตารางราคา
+st.sidebar.subheader("👁️ การแสดงผลตารางสรุปราคา")
+show_sub_items = st.sidebar.checkbox("แสดงรายการย่อยในตารางสรุปราคา (จุดส่งเพิ่ม / รายละเอียดค่าแรง)", value=True)
+
+# --- ส่วนเซฟข้อมูลลงไฟล์ ---
+st.sidebar.markdown("---")
+st.sidebar.subheader("💾 บันทึกการตั้งค่าปัจจุบัน")
+save_preset_name = st.sidebar.text_input("ตั้งชื่อรายการสำหรับบันทึก", f"รายการส่งถัง {num_destinations} จุด ({num_tanks} ถัง)")
+if st.sidebar.button("💾 บันทึกข้อมูลนี้", use_container_width=True):
+    if save_preset_name.strip():
+        save_payload = {
+            "raw_origin": raw_origin,
+            "num_destinations": num_destinations,
+            "start_fee_from_stop": start_fee_from_stop,
+            "default_extra_fee_amount": default_extra_fee_amount,
+            "destinations": [{"raw": d["raw"], "stop_fee": d["stop_fee"]} for d in destinations_data],
+            "num_trucks": num_trucks,
+            "trucks": [{"type": t_type, "cost": t_cost} for i in range(int(num_trucks))],
+            "use_distance_cost": use_distance_cost,
+            "base_free_km": base_free_km,
+            "cost_per_km": cost_per_km,
+            "num_laborers": num_laborers,
+            "base_wage": base_wage,
+            "early_morning_fee": early_morning_fee,
+            "diligence_allowance": diligence_allowance,
+            "sso_company_fee": sso_company_fee,
+            "lifting_fee_per_tank": lifting_fee_per_tank,
+            "num_tanks": num_tanks
+        }
+        history_dict[save_preset_name.strip()] = save_payload
+        save_history(history_dict)
+        st.sidebar.success(f"บันทึกรายการ '{save_preset_name.strip()}' สำเร็จ!")
+        st.rerun()
+
+# --- ส่วนที่ 2: ประมวลผลคำนวณสรุปราคา ---
+total_lifting_fee = lifting_fee_per_tank * num_tanks
+
+total_shipping_cost = total_base_trip_cost + distance_cost + total_labor_cost + total_lifting_fee + total_extra_stop_fee
+cost_per_tank = total_shipping_cost / num_tanks if num_tanks > 0 else 0.0
+
+# --- ส่วนที่ 3: แสดงผลตารางสรุปราคา ---
+st.header("📊 1. ตารางราคาค่าขนส่งและรายละเอียด")
+
+col1, col2 = st.columns([2, 1])
+
+trucks_summary_str = f"ค่าขนส่งพื้นฐานรวม ({num_trucks} คัน: {', '.join(truck_details)})"
+labor_detail_str = f"ค่าแรงและสวัสดิการเด็กยก ({num_laborers} คน @ คนละ {cost_per_laborer:,.2f} ฿)"
+
+dest_summary_list = [f"จุด {d['index']}: {d['display']}" for d in destinations_data]
+route_summary_str = f"{origin_display} ➔ " + " ➔ ".join(dest_summary_list)
+
+charged_stops_count = sum(1 for d in destinations_data if d['stop_fee'] > 0)
+
+with col1:
+    breakdown_items = [
+        f"เส้นทางจัดส่ง ({len(destinations_data)} จุดส่ง): {route_summary_str}",
+        trucks_summary_str,
+        distance_detail_str,
+        f"ค่าบริการจุดส่งเพิ่ม (เริ่มคิดจุดที่ {start_fee_from_stop} เป็นต้นไป - คิดเงิน {charged_stops_count} จุด)",
+    ]
+    breakdown_costs = [
+        "-",
+        total_base_trip_cost,
+        distance_cost,
+        total_extra_stop_fee
+    ]
+
+    if show_sub_items:
+        for d in destinations_data:
+            status_str = "ฟรี" if d['stop_fee'] == 0 else f"+{d['stop_fee']:,.2f} ฿"
+            breakdown_items.append(f"  └─ จุดส่งที่ {d['index']} ({d['display']}) [{status_str}]")
+            breakdown_costs.append(d['stop_fee'])
+
+    breakdown_items.append(labor_detail_str)
+    breakdown_costs.append(total_labor_cost)
+
+    if show_sub_items:
+        breakdown_items.extend([
+            f"  └─ ค่าแรงพื้นฐาน ({num_laborers} คน x {base_wage:,.2f} ฿)",
+            f"  └─ ค่าออกเช้า ({num_laborers} คน x {early_morning_fee:,.2f} ฿)",
+            f"  └─ ค่าเบี้ยขยัน ({num_laborers} คน x {diligence_allowance:,.2f} ฿)",
+            f"  └─ ค่า บ.ส่ง ประกันสังคม ({num_laborers} คน x {sso_company_fee:,.2f} ฿)",
+        ])
+        breakdown_costs.extend([
+            base_wage * num_laborers,
+            early_morning_fee * num_laborers,
+            diligence_allowance * num_laborers,
+            sso_company_fee * num_laborers,
+        ])
+
+    breakdown_items.extend([
+        f"ค่ายกถัง ({num_tanks} ถัง x {lifting_fee_per_tank:,.2f} ฿)",
+        "รวมค่าขนส่งสุทธิ"
+    ])
+
+    breakdown_costs.extend([
+        total_lifting_fee,
+        total_shipping_cost
+    ])
+
+    # จัดรูปแบบตัวเลขให้มีคอมม่าหลักพัน และ ทศนิยม 2 ตำแหน่ง
+    formatted_costs = []
+    for c in breakdown_costs:
+        if isinstance(c, (int, float)):
+            formatted_costs.append(f"{c:,.2f}")
+        else:
+            formatted_costs.append(str(c))
+
+    df_breakdown = pd.DataFrame({
+        "รายการ": breakdown_items,
+        "จำนวนเงิน (บาท)": formatted_costs
+    })
+    st.table(df_breakdown)
+
+with col2:
+    st.metric(label="🎯 ค่าขนส่งรวมทั้งหมด", value=f"{total_shipping_cost:,.2f} บาท")
+    st.metric(
+        label="🏷️ ค่าขนส่งต่อถัง (บาท/ถัง)", 
+        value=f"{cost_per_tank:,.2f} ฿/ถัง",
+        delta=f"ส่งทั้งหมด {num_tanks} ถัง ({num_trucks} คัน / {len(destinations_data)} จุดส่ง)",
+        delta_color="off"
+    )
+
+st.markdown("---")
+
+# --- ส่วนที่ 4: แสดงผลแผนที่ ---
+st.header("🗺️ 2. แผนที่แสดงจุดจัดส่งและเส้นทางถนนจริง")
+
+valid_coords = [c for c in all_coords if c is not None]
+
+if len(valid_coords) >= 2:
+    avg_lat = sum(c[0] for c in valid_coords) / len(valid_coords)
+    avg_lon = sum(c[1] for c in valid_coords) / len(valid_coords)
+    
+    m = folium.Map(location=[avg_lat, avg_lon], zoom_start=9)
+    
+    if loc_origin:
+        folium.Marker(
+            loc_origin, 
+            popup=f"ต้นทาง: {origin_display}", 
+            tooltip=f"ต้นทาง: {origin_display}", 
+            icon=folium.Icon(color="green", icon="play")
+        ).add_to(m)
+    
+    for d in destinations_data:
+        if d["coord"]:
+            icon_color = "orange" if d['stop_fee'] > 0 else "red"
+            fee_text = f"ฟรี" if d['stop_fee'] == 0 else f"+{d['stop_fee']:,.2f} ฿"
+            
+            folium.Marker(
+                d["coord"], 
+                popup=f"จุดส่งที่ {d['index']}: {d['display']} [{fee_text}]", 
+                tooltip=f"จุดส่งที่ {d['index']}: {d['display']} [{fee_text}]", 
+                icon=folium.Icon(color=icon_color, icon="flag")
+            ).add_to(m)
+    
+    if route_points:
+        folium.PolyLine(route_points, color="blue", weight=5, opacity=0.8, tooltip=f"ระยะทางรวม {auto_distance_km:,.2f} กม.").add_to(m)
+    else:
+        folium.PolyLine(valid_coords, color="gray", weight=3, opacity=0.5, dash_array="5, 10").add_to(m)
+    
+    st_folium(m, width=1000, height=450)
+else:
+    st.error("❌ ไม่สามารถดึงพิกัดได้ กรุณาตรวจสอบพิกัดต้นทางและจุดส่ง")
