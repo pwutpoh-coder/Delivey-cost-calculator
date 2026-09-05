@@ -1,8 +1,6 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import folium
-from streamlit_folium import st_folium
 
 # ---------------------------------------------------------
 # 1. การตั้งค่าหน้าเว็บหลักของ Streamlit
@@ -19,7 +17,7 @@ CSV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:cs
 
 
 # ---------------------------------------------------------
-# 2. ฟังก์ชันดึงและประมวลผลข้อมูล (Cache 5 นาที)
+# 2. ฟังก์ชันดึงและประมวลผลข้อมูล
 # ---------------------------------------------------------
 @st.cache_data(ttl=300)
 def load_data():
@@ -83,20 +81,6 @@ if df.empty:
 # ---------------------------------------------------------
 st.sidebar.title("⚙️ แผงควบคุม (Controls)")
 
-st.sidebar.subheader("🗺️ สไตล์แผนที่")
-map_tile_option = st.sidebar.selectbox(
-    "เลือกสไตล์แผนที่:",
-    options=["OpenStreetMap (มาตรฐาน)", "CartoDB Positron (สว่าง)", "CartoDB Dark Matter (มืด)"],
-    index=0
-)
-
-TILE_DICT = {
-    "OpenStreetMap (มาตรฐาน)": "OpenStreetMap",
-    "CartoDB Positron (สว่าง)": "CartoDB positron",
-    "CartoDB Dark Matter (มืด)": "CartoDB dark_matter"
-}
-selected_tile = TILE_DICT[map_tile_option]
-
 if month_cols:
     selected_month_col = st.sidebar.selectbox(
         "เลือกคอลัมน์ยอดส่งสำหรับขนาดจุด:",
@@ -109,8 +93,8 @@ else:
 radius_multiplier = st.sidebar.slider(
     "ปรับขนาดจุดพิกัด:",
     min_value=1,
-    max_value=30,
-    value=8
+    max_value=50,
+    value=15
 )
 
 st.sidebar.subheader("🔍 ตัวกรองกลุ่มข้อมูล")
@@ -131,11 +115,11 @@ if 'เบอร์รถ' in filtered_df.columns and selected_car:
 
 
 # ---------------------------------------------------------
-# 5. ฟังก์ชันเรนเดอร์แผนที่ Folium
+# 5. ฟังก์ชันเรนเดอร์แผนที่แบบ Streamlit Native Map
 # ---------------------------------------------------------
 HEX_COLORS = [
-    "#FF6384", "#36A2EB", "#FFCE56", "#4BC0C0",
-    "#9966FF", "#FF9F40", "#E74C3C", "#2ECC71",
+    "#FF2A6D", "#05D9E8", "#FFC300", "#00FF66",
+    "#D600FF", "#FF7700", "#E74C3C", "#2ECC71",
     "#3498DB", "#9B59B6", "#F1C40F", "#E67E22"
 ]
 
@@ -171,82 +155,55 @@ def render_map(data, color_column, key_suffix=""):
         )
         st.session_state[session_key] = selected_points
 
-    # คำนวณตำแหน่งจุดศูนย์กลาง
-    if len(selected_points) > 0:
-        sel_df = data[data['point_label'].isin(selected_points)]
-        center_lat = float(sel_df['lat'].mean())
-        center_lon = float(sel_df['lon'].mean())
-        zoom_start = 11
+    # เตรียมข้อมูลสำหรับแผนที่ Native Map
+    map_data = data.copy()
+
+    # คำนวณขนาด
+    if selected_month_col and selected_month_col in map_data.columns:
+        max_val = map_data[selected_month_col].max()
+        max_val = max_val if max_val > 0 else 1
+        map_data['size'] = (map_data[selected_month_col] / max_val) * (radius_multiplier * 50) + 10
     else:
-        center_lat = float(data['lat'].mean())
-        center_lon = float(data['lon'].mean())
-        zoom_start = 7
+        map_data['size'] = radius_multiplier * 10
 
-    if np.isnan(center_lat) or np.isnan(center_lon):
-        center_lat, center_lon = 13.7563, 100.5018
-
-    # สร้าง Folium Map
-    m = folium.Map(
-        location=[center_lat, center_lon],
-        zoom_start=zoom_start,
-        tiles=selected_tile
-    )
-
-    # วาดจุดลงบนแผนที่
+    # คำนวณสี
     selected_set = set(selected_points)
-    max_val = data[selected_month_col].max() if selected_month_col and selected_month_col in data.columns else 1
-    max_val = max_val if max_val > 0 else 1
 
-    for _, row in data.iterrows():
-        point_name = str(row['point_label'])
-        group_val = row.get(color_column, "N/A")
-        
-        # คำนวณขนาด
-        val = row[selected_month_col] if selected_month_col and selected_month_col in row else 1
-        r = (val / max_val) * (radius_multiplier * 2) + 4
-        
-        # คำนวณสีและความโปร่งแสง
+    def get_hex_color(row):
+        lbl = row['point_label']
+        grp = row.get(color_column, None)
         if len(selected_set) > 0:
-            if point_name in selected_set:
-                color = c_map.get(group_val, "#3388ff")
-                opacity = 0.9
-                r *= 1.5
-            else:
-                color = "#cccccc"
-                opacity = 0.25
+            return c_map.get(grp, "#3388FF") if lbl in selected_set else "#CCCCCC"
         else:
-            color = c_map.get(group_val, "#3388ff")
-            opacity = 0.8
+            return c_map.get(grp, "#3388FF")
 
-        popup_html = f"""
-        <div style='font-family: sans-serif; font-size: 12px; line-height: 1.5;'>
-            <b>รหัสสมาชิก:</b> {row.get('รหัสสมาชิก', '')}<br/>
-            <b>ชื่อ:</b> {row.get('ชื่อ-นามสกุล', '')}<br/>
-            <b>คลัง:</b> {row.get('คลัง', '')}<br/>
-            <b>เบอร์รถ:</b> {row.get('เบอร์รถ', '')}<br/>
-            <b>ยอดส่ง:</b> {val:,.0f}
-        </div>
-        """
+    map_data['color'] = map_data.apply(get_hex_color, axis=1)
 
-        folium.CircleMarker(
-            location=[row['lat'], row['lon']],
-            radius=r,
-            color=color,
-            fill=True,
-            fill_color=color,
-            fill_opacity=opacity,
-            popup=folium.Popup(popup_html, max_width=250),
-            tooltip=point_name
-        ).add_to(m)
+    if len(selected_set) > 0:
+        map_data['size'] = np.where(
+            map_data['point_label'].isin(selected_set), 
+            map_data['size'] * 1.5, 
+            map_data['size'] * 0.3
+        )
 
-    # แสดงแผนที่ใน Streamlit
-    st_folium(m, width="100%", height=500, key=f"folium_map_{key_suffix}", returned_objects=[])
+    # แสดงผลผ่าน st.map
+    st.map(
+        map_data,
+        latitude='lat',
+        longitude='lon',
+        color='color',
+        size='size',
+        use_container_width=True
+    )
 
     # แสดงสัญลักษณ์สี (Legend)
     legend_cols = st.columns(min(len(unique_keys), 6) if len(unique_keys) > 0 else 1)
     for i, key in enumerate(unique_keys):
         hex_color = c_map[key]
-        legend_cols[i % 6].markdown(f"<span style='color:{hex_color}; font-size:16px;'>██</span> <b>{key}</b>", unsafe_allow_html=True)
+        legend_cols[i % 6].markdown(
+            f"<span style='color:{hex_color}; font-size:16px;'>██</span> <b>{key}</b>", 
+            unsafe_allow_html=True
+        )
 
 
 # ---------------------------------------------------------
@@ -284,7 +241,9 @@ search_term = st.text_input("🔍 ค้นหาข้อมูลในตา�
 display_df = filtered_df.drop(columns=['lat', 'lon', 'point_label'], errors='ignore')
 
 if search_term:
-    mask = display_df.astype(str).apply(lambda r: r.str.contains(search_term, case=False, na=False), axis=1).any(axis=1)
+    mask = display_df.astype(str).apply(
+        lambda r: r.str.contains(search_term, case=False, na=False), axis=1
+    ).any(axis=1)
     search_result_df = display_df[mask]
 else:
     search_result_df = display_df
