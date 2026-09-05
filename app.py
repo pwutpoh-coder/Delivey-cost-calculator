@@ -15,6 +15,20 @@ st.title("🚚 แพลตฟอร์มคำนวณค่าขนส่�
 geolocator = ArcGIS(timeout=10)
 HISTORY_FILE = "history_data.json"
 
+# จานสีสำหรับรถแต่ละคัน (รองรับสูงสุด 10 สี และวนซ้ำได้)
+ROUTE_COLORS = [
+    {"line": "#1f77b4", "marker": "blue"},
+    {"line": "#ff7f0e", "marker": "orange"},
+    {"line": "#2ca02c", "marker": "green"},
+    {"line": "#9467bd", "marker": "purple"},
+    {"line": "#d62728", "marker": "red"},
+    {"line": "#8c564b", "marker": "darkred"},
+    {"line": "#e377c2", "marker": "pink"},
+    {"line": "#7f7f7f", "marker": "gray"},
+    {"line": "#bcbd22", "marker": "cadetblue"},
+    {"line": "#17becf", "marker": "lightblue"}
+]
+
 # --- ฟังก์ชันจัดการไฟล์ JSON บันทึก/โหลด ประวัติ ---
 def load_history():
     if os.path.exists(HISTORY_FILE):
@@ -152,7 +166,6 @@ default_num_dest = loaded_data.get("num_destinations", 1) if loaded_data else 1
 num_destinations = st.sidebar.number_input("จำนวนจุดจัดส่งปลายทางทั้งหมด (จุด)", min_value=1, value=int(default_num_dest), step=1)
 
 destinations_data = []
-all_coords = [loc_origin] if loc_origin else []
 saved_dest_list = loaded_data.get("destinations", []) if loaded_data else []
 
 for j in range(int(num_destinations)):
@@ -167,15 +180,15 @@ for j in range(int(num_destinations)):
     if raw_dest and loc_dest:
         st.sidebar.caption(f"📍 แปลงเป็น: **{dest_display}**")
     
-    if loc_dest:
-        all_coords.append(loc_dest)
-    
     destinations_data.append({
         "index": stop_num,
         "raw": raw_dest,
         "coord": loc_dest,
         "display": dest_display if dest_display else f"จุดที่ {stop_num}"
     })
+
+# Map จุดส่งเพื่อให้ค้นหาได้ง่ายขึ้นตาม string label
+dest_map = {f"จุดส่งที่ {d['index']}: {d['display']}": d for d in destinations_data}
 
 # 1.4 รถและการมอบหมายจุดส่ง พร้อมค่าบริการเพิ่มต่อจุด
 st.sidebar.subheader("🚚 เงื่อนไขการขนส่งและตั้งค่าต่อคัน")
@@ -186,12 +199,15 @@ saved_trucks_list = loaded_data.get("trucks", []) if loaded_data else []
 
 truck_details = []
 trucks_save_state = []
+truck_routes_info = [] # เก็บพิกัดและเส้นทาง OSRM รายคัน
 total_base_trip_cost = 0.0
 total_extra_stop_fee = 0.0
 truck_stop_fees_breakdown = []
+auto_total_distance_km = 0.0
 
 for i in range(int(num_trucks)):
     st.sidebar.markdown(f"--- \n**🚛 คันที่ {i+1}**")
+    color_info = ROUTE_COLORS[i % len(ROUTE_COLORS)]
     
     saved_truck = saved_trucks_list[i] if i < len(saved_trucks_list) else {}
     default_truck_type = saved_truck.get("type", "รถกระบะ 4 ล้อ")
@@ -216,7 +232,7 @@ for i in range(int(num_trucks)):
         t_rate = st.sidebar.number_input(f"ค่าขนส่งราคาต่อถัง (คันที่ {i+1}) [บาท/ถัง]", min_value=0.0, value=float(default_rate), step=5.0, format="%.2f", key=f"truck_rate_{i}")
         t_cost = t_rate * num_tanks
 
-    dest_options = [f"จุดส่งที่ {d['index']}: {d['display']}" for d in destinations_data]
+    dest_options = list(dest_map.keys())
     assigned_stops = st.sidebar.multiselect(
         f"จุดส่งที่รถคันที่ {i+1} วิ่งส่ง",
         options=dest_options,
@@ -226,6 +242,32 @@ for i in range(int(num_trucks)):
     
     stops_count = len(assigned_stops)
     
+    # คำนวณเส้นทางและระยะทางเฉพาะคันนี้
+    truck_coords = []
+    if loc_origin:
+        truck_coords.append(loc_origin)
+    for stop_label in assigned_stops:
+        target_dest = dest_map.get(stop_label)
+        if target_dest and target_dest["coord"]:
+            truck_coords.append(target_dest["coord"])
+
+    if len(truck_coords) >= 2:
+        t_dist_km, t_route_pts = get_multi_stop_route(truck_coords)
+    else:
+        t_dist_km, t_route_pts = 0.0, []
+
+    auto_total_distance_km += t_dist_km
+
+    truck_routes_info.append({
+        "truck_index": i + 1,
+        "truck_type": t_type,
+        "assigned_stops": [dest_map[s] for s in assigned_stops if s in dest_map],
+        "coords": truck_coords,
+        "distance_km": t_dist_km,
+        "route_points": t_route_pts,
+        "color": color_info
+    })
+
     t_start_fee_from = st.sidebar.number_input(
         f"เริ่มคิดค่าส่งเพิ่มคันที่ {i+1} ตั้งแต่จุดที่เท่าไร?",
         min_value=1,
@@ -255,9 +297,9 @@ for i in range(int(num_trucks)):
         })
 
     if t_calc_mode == "เหมาจ่ายต่อเที่ยว":
-        truck_details.append(f"{t_type} ({t_cost:,.2f} ฿ [เหมา] - วิ่ง {stops_count} จุด)")
+        truck_details.append(f"{t_type} ({t_cost:,.2f} ฿ [เหมา] - วิ่ง {stops_count} จุด / {t_dist_km:,.2f} กม.)")
     else:
-        truck_details.append(f"{t_type} ({t_rate:,.2f} ฿/ถัง x {num_tanks} ถัง = {t_cost:,.2f} ฿ - วิ่ง {stops_count} จุด)")
+        truck_details.append(f"{t_type} ({t_rate:,.2f} ฿/ถัง x {num_tanks} ถัง = {t_cost:,.2f} ฿ - วิ่ง {stops_count} จุด / {t_dist_km:,.2f} กม.)")
 
     trucks_save_state.append({
         "type": t_type,
@@ -270,16 +312,11 @@ for i in range(int(num_trucks)):
     total_base_trip_cost += float(t_cost)
 
 # 1.5 คำนวณระยะทางรวมอัตโนมัติ
-if len(all_coords) >= 2 and all(c is not None for c in all_coords):
-    auto_distance_km, route_points = get_multi_stop_route(all_coords)
-else:
-    auto_distance_km, route_points = 0.0, []
-
 st.sidebar.subheader("📏 เงื่อนไขระยะทาง")
 distance_km = st.sidebar.number_input(
-    "ระยะทางรวมคำนวณอัตโนมัติ (กิโลเมตร)", 
+    "ระยะทางรวมทุกคัน (กิโลเมตร)", 
     min_value=0.0, 
-    value=float(auto_distance_km), 
+    value=float(auto_total_distance_km), 
     step=1.0,
     format="%.2f"
 )
@@ -484,42 +521,85 @@ with col2:
 st.markdown("---")
 
 # --- ส่วนที่ 4: แสดงผลแผนที่ ---
-st.header("🗺️ 2. แผนที่แสดงจุดจัดส่งและเส้นทางถนนจริง")
+st.header("🗺️ 2. แผนที่แสดงจุดจัดส่งและเส้นทางถนนจริง (แยกสีตามคันรถ)")
 
-valid_coords = [c for c in all_coords if c is not None]
+all_valid_coords = []
+if loc_origin:
+    all_valid_coords.append(loc_origin)
+for d in destinations_data:
+    if d["coord"]:
+        all_valid_coords.append(d["coord"])
 
-# กำหนดค่าเริ่มต้นแผนที่ (หากยังไม่มีการใส่พิกัด ให้แสดงแผนที่กรุงเทพฯ เป็นค่าเริ่มต้น)
-if len(valid_coords) >= 1:
-    avg_lat = sum(c[0] for c in valid_coords) / len(valid_coords)
-    avg_lon = sum(c[1] for c in valid_coords) / len(valid_coords)
+# กำหนดค่าเริ่มต้นแผนที่
+if len(all_valid_coords) >= 1:
+    avg_lat = sum(c[0] for c in all_valid_coords) / len(all_valid_coords)
+    avg_lon = sum(c[1] for c in all_valid_coords) / len(all_valid_coords)
     zoom_level = 9
 else:
     avg_lat, avg_lon = 13.7563, 100.5018  # พิกัดกรุงเทพมหานคร
-    zoom_level = 6  # ซูมระดับกว้างเพื่อให้เห็นประเทศไทย
+    zoom_level = 6
 
 m = folium.Map(location=[avg_lat, avg_lon], zoom_start=zoom_level)
 
+# 1. หมุดจุดต้นทาง
 if loc_origin:
     folium.Marker(
         loc_origin, 
         popup=f"ต้นทาง: {origin_display}", 
         tooltip=f"ต้นทาง: {origin_display}", 
-        icon=folium.Icon(color="green", icon="play")
+        icon=folium.Icon(color="black", icon="play", prefix="fa")
     ).add_to(m)
 
-for d in destinations_data:
-    if d["coord"]:
-        folium.Marker(
-            d["coord"], 
-            popup=f"จุดส่งที่ {d['index']}: {d['display']}", 
-            tooltip=f"จุดส่งที่ {d['index']}: {d['display']}", 
-            icon=folium.Icon(color="red", icon="flag")
+# 2. วาดเส้นทางและปักหมุดจุดส่งแยกตามคันรถ
+for t_info in truck_routes_info:
+    t_idx = t_info["truck_index"]
+    t_type = t_info["truck_type"]
+    color_line = t_info["color"]["line"]
+    color_marker = t_info["color"]["marker"]
+    
+    # วาดเส้นทาง OSRM ของรถคันนี้
+    if t_info["route_points"]:
+        folium.PolyLine(
+            t_info["route_points"], 
+            color=color_line, 
+            weight=5, 
+            opacity=0.8, 
+            tooltip=f"คันที่ {t_idx} ({t_type}): {t_info['distance_km']:,.2f} กม."
+        ).add_to(m)
+    elif len(t_info["coords"]) >= 2:
+        folium.PolyLine(
+            t_info["coords"], 
+            color=color_line, 
+            weight=3, 
+            opacity=0.5, 
+            dash_array="5, 10",
+            tooltip=f"คันที่ {t_idx} ({t_type}) - เส้นตรงจำลอง"
         ).add_to(m)
 
-if route_points:
-    folium.PolyLine(route_points, color="blue", weight=5, opacity=0.8, tooltip=f"ระยะทางรวม {auto_distance_km:,.2f} กม.").add_to(m)
-elif len(valid_coords) >= 2:
-    folium.PolyLine(valid_coords, color="gray", weight=3, opacity=0.5, dash_array="5, 10").add_to(m)
+    # ปักหมุดเฉพาะจุดส่งที่รถคันนี้ได้รับมอบหมาย
+    for stop_item in t_info["assigned_stops"]:
+        if stop_item["coord"]:
+            folium.Marker(
+                stop_item["coord"], 
+                popup=f"รถคันที่ {t_idx} ({t_type}) <br>จุดส่งที่ {stop_item['index']}: {stop_item['display']}", 
+                tooltip=f"คันที่ {t_idx} ➔ จุดส่งที่ {stop_item['index']}: {stop_item['display']}", 
+                icon=folium.Icon(color=color_marker, icon="flag")
+            ).add_to(m)
 
-# แสดงผลแผนที่เสมอ ไม่ว่าจะกรอกพิกัดแล้วหรือยังก็ตาม
+# ปักหมุดจุดส่งที่ยังไม่ถูกมอบหมายให้รถคันใดเลย (ถ้ามี)
+assigned_dest_indices = set()
+for t_info in truck_routes_info:
+    for s in t_info["assigned_stops"]:
+        assigned_dest_indices.add(s["index"])
+
+for d in destinations_data:
+    if d["index"] not in assigned_dest_indices and d["coord"]:
+        folium.Marker(
+            d["coord"], 
+            popup=f"ยังไม่ได้มอบหมายรถ <br>จุดส่งที่ {d['index']}: {d['display']}", 
+            tooltip=f"⚠️ ยังไม่ได้เลือก คันที่จะส่งจุดที่ {d['index']}", 
+            icon=folium.Icon(color="gray", icon="info-sign")
+        ).add_to(m)
+
+# แสดงผลแผนที่
 st_folium(m, width=1000, height=450)
