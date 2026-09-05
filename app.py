@@ -151,56 +151,18 @@ st.sidebar.subheader("📍 จุดจัดส่งปลายทาง")
 default_num_dest = loaded_data.get("num_destinations", 1) if loaded_data else 1
 num_destinations = st.sidebar.number_input("จำนวนจุดจัดส่งปลายทางทั้งหมด (จุด)", min_value=1, value=int(default_num_dest), step=1)
 
-st.sidebar.markdown("**⚙️ ตั้งค่าเงื่อนไขราคาจุดส่งเพิ่ม**")
-
-default_start_stop = loaded_data.get("start_fee_from_stop", 2) if loaded_data else 2
-start_fee_from_stop = st.sidebar.number_input(
-    "เริ่มคิดราคาเพิ่มตั้งแต่จุดส่งที่เท่าไรขึ้นไป?", 
-    min_value=1, 
-    max_value=max(1, int(num_destinations)), 
-    value=min(int(default_start_stop), max(1, int(num_destinations))), 
-    step=1
-)
-
-default_extra_fee_val = loaded_data.get("default_extra_fee_amount", 0.0) if loaded_data else 0.0
-default_extra_fee_amount = st.sidebar.number_input("อัตราค่าบริการเพิ่มมาตรฐานต่อจุด (บาท)", min_value=0.0, value=float(default_extra_fee_val), step=100.0, format="%.2f")
-
 destinations_data = []
 all_coords = [loc_origin] if loc_origin else []
-total_extra_stop_fee = 0.0
-
-st.sidebar.markdown("---")
-
 saved_dest_list = loaded_data.get("destinations", []) if loaded_data else []
 
 for j in range(int(num_destinations)):
     stop_num = j + 1
-    st.sidebar.markdown(f"**📍 จุดส่งที่ {stop_num}**")
-    
-    if stop_num >= start_fee_from_stop and num_destinations > 1:
-        calculated_default_fee = default_extra_fee_amount
-        fee_label_suffix = f" (เข้าเงื่อนไขตั้งแต่งานจุดที่ {start_fee_from_stop})"
-    else:
-        calculated_default_fee = 0.0
-        fee_label_suffix = f" (ฟรี/รวมในค่าขนส่งหลัก)"
-
     if j < len(saved_dest_list):
-        default_val = saved_dest_list[j].get("raw", "")
-        saved_fee = saved_dest_list[j].get("stop_fee", calculated_default_fee)
+        default_val = saved_dest_list[j].get("raw", "") if isinstance(saved_dest_list[j], dict) else saved_dest_list[j]
     else:
         default_val = ""
-        saved_fee = calculated_default_fee
 
     raw_dest = st.sidebar.text_input(f"พิกัด/ชื่อจุดส่งที่ {stop_num}", default_val, key=f"dest_input_{j}", placeholder="ระบุพิกัดหรือชื่อสถานที่")
-    stop_fee = st.sidebar.number_input(
-        f"ค่าบริการเพิ่มจุดที่ {stop_num} (บาท){fee_label_suffix}", 
-        min_value=0.0, 
-        value=float(saved_fee), 
-        step=100.0, 
-        format="%.2f",
-        key=f"stop_fee_{j}"
-    )
-    
     loc_dest, dest_display = parse_and_resolve_location(raw_dest)
     if raw_dest and loc_dest:
         st.sidebar.caption(f"📍 แปลงเป็น: **{dest_display}**")
@@ -212,31 +174,31 @@ for j in range(int(num_destinations)):
         "index": stop_num,
         "raw": raw_dest,
         "coord": loc_dest,
-        "display": dest_display if dest_display else f"จุดที่ {stop_num}",
-        "stop_fee": float(stop_fee),
-        "is_charged": stop_num >= start_fee_from_stop
+        "display": dest_display if dest_display else f"จุดที่ {stop_num}"
     })
-    total_extra_stop_fee += float(stop_fee)
 
-# 1.4 รถและการมอบหมายจุดส่ง
-st.sidebar.subheader("🚚 เงื่อนไขการขนส่งและประเภทรถ")
+# 1.4 รถและการมอบหมายจุดส่ง พร้อมค่าบริการเพิ่มต่อจุด
+st.sidebar.subheader("🚚 เงื่อนไขการขนส่งและตั้งค่าต่อคัน")
 default_num_trucks = loaded_data.get("num_trucks", 1) if loaded_data else 1
 num_trucks = st.sidebar.number_input("จำนวนรถที่ใช้ (คัน)", min_value=1, value=int(default_num_trucks), step=1)
 
 saved_trucks_list = loaded_data.get("trucks", []) if loaded_data else []
 
 truck_details = []
-trucks_save_state = []  # เก็บสถานะไว้เซฟลงไฟล์
+trucks_save_state = []
 total_base_trip_cost = 0.0
+total_extra_stop_fee = 0.0
+truck_stop_fees_breakdown = []
 
 for i in range(int(num_trucks)):
-    st.sidebar.markdown(f"**🚛 คันที่ {i+1}**")
+    st.sidebar.markdown(f"--- \n**🚛 คันที่ {i+1}**")
     
-    # โหลดค่าจากไฟล์เดิมถ้ามี
     saved_truck = saved_trucks_list[i] if i < len(saved_trucks_list) else {}
     default_truck_type = saved_truck.get("type", "รถกระบะ 4 ล้อ")
     default_calc_mode = saved_truck.get("calc_mode", "เหมาจ่ายต่อเที่ยว")
     default_rate = saved_truck.get("rate", 0.0)
+    default_stop_fee = saved_truck.get("extra_stop_fee", 0.0)
+    default_start_fee = saved_truck.get("start_fee_from_stop", 2)
     
     type_options = ["รถกระบะ 4 ล้อ", "รถ 6 ล้อ", "รถ 10 ล้อ"]
     type_index = type_options.index(default_truck_type) if default_truck_type in type_options else 0
@@ -254,24 +216,56 @@ for i in range(int(num_trucks)):
         t_rate = st.sidebar.number_input(f"ค่าขนส่งราคาต่อถัง (คันที่ {i+1}) [บาท/ถัง]", min_value=0.0, value=float(default_rate), step=5.0, format="%.2f", key=f"truck_rate_{i}")
         t_cost = t_rate * num_tanks
 
+    dest_options = [f"จุดส่งที่ {d['index']}: {d['display']}" for d in destinations_data]
     assigned_stops = st.sidebar.multiselect(
         f"จุดส่งที่รถคันที่ {i+1} วิ่งส่ง",
-        options=[f"จุดส่งที่ {d['index']}: {d['display']}" for d in destinations_data],
-        default=[f"จุดส่งที่ {d['index']}: {d['display']}" for d in destinations_data] if num_trucks == 1 else [],
+        options=dest_options,
+        default=dest_options if num_trucks == 1 else [],
         key=f"truck_stops_{i}"
     )
     
     stops_count = len(assigned_stops)
+    
+    # ย้ายการตั้งค่าค่าบริการเพิ่มจุดมาไว้ตรงนี้
+    t_start_fee_from = st.sidebar.number_input(
+        f"เริ่มคิดค่าส่งเพิ่มคันที่ {i+1} ตั้งแต่จุดที่เท่าไร?",
+        min_value=1,
+        max_value=max(1, stops_count),
+        value=min(int(default_start_fee), max(1, stops_count)),
+        step=1,
+        key=f"truck_start_fee_{i}"
+    )
+    
+    t_extra_stop_fee = st.sidebar.number_input(
+        f"ค่าบริการเพิ่มต่อจุด (คันที่ {i+1}) [บาท/จุด]", 
+        min_value=0.0, 
+        value=float(default_stop_fee), 
+        step=100.0, 
+        format="%.2f", 
+        key=f"truck_stop_fee_{i}"
+    )
+
+    charged_stops_for_truck = max(0, stops_count - int(t_start_fee_from) + 1) if stops_count >= t_start_fee_from else 0
+    truck_total_stop_fee = charged_stops_for_truck * t_extra_stop_fee
+    total_extra_stop_fee += truck_total_stop_fee
+
+    if charged_stops_for_truck > 0:
+        truck_stop_fees_breakdown.append({
+            "label": f"  └─ คันที่ {i+1} ({t_type}): คิด {charged_stops_for_truck} จุด (จุดที่ {t_start_fee_from} ขึ้นไป) @ {t_extra_stop_fee:,.2f} ฿",
+            "cost": truck_total_stop_fee
+        })
+
     if t_calc_mode == "เหมาจ่ายต่อเที่ยว":
         truck_details.append(f"{t_type} ({t_cost:,.2f} ฿ [เหมา] - วิ่ง {stops_count} จุด)")
     else:
         truck_details.append(f"{t_type} ({t_rate:,.2f} ฿/ถัง x {num_tanks} ถัง = {t_cost:,.2f} ฿ - วิ่ง {stops_count} จุด)")
 
-    # สะสมค่าไว้เตรียม บันทึก (Save)
     trucks_save_state.append({
         "type": t_type,
         "calc_mode": t_calc_mode,
-        "rate": float(t_rate)
+        "rate": float(t_rate),
+        "extra_stop_fee": float(t_extra_stop_fee),
+        "start_fee_from_stop": int(t_start_fee_from)
     })
 
     total_base_trip_cost += float(t_cost)
@@ -371,11 +365,9 @@ if st.sidebar.button("💾 บันทึกข้อมูลนี้", use_c
         save_payload = {
             "raw_origin": raw_origin,
             "num_destinations": num_destinations,
-            "start_fee_from_stop": start_fee_from_stop,
-            "default_extra_fee_amount": default_extra_fee_amount,
-            "destinations": [{"raw": d["raw"], "stop_fee": d["stop_fee"]} for d in destinations_data],
+            "destinations": [d["raw"] for d in destinations_data],
             "num_trucks": num_trucks,
-            "trucks": trucks_save_state,  # เซฟข้อมูลรถแบบครบถ้วน (type, calc_mode, rate)
+            "trucks": trucks_save_state,
             "use_distance_cost": use_distance_cost,
             "base_free_km": base_free_km,
             "cost_per_km": cost_per_km,
@@ -400,7 +392,7 @@ cost_per_tank = total_shipping_cost / num_tanks if num_tanks > 0 else 0.0
 # --- ส่วนที่ 3: แสดงผลตารางสรุปราคา ---
 st.header("📊 1. ตารางราคาค่าขนส่งและรายละเอียด")
 
-col1, col2 = st.columns([2, 1])
+col1, col2 = st.columns([2.2, 1])
 
 trucks_summary_str = f"ค่าขนส่งพื้นฐานรวม ({num_trucks} คัน: {', '.join(truck_details)})"
 labor_detail_str = f"ค่าแรงและสวัสดิการเด็กยก ({num_laborers} คน @ คนละ {cost_per_laborer:,.2f} ฿)"
@@ -409,14 +401,12 @@ dest_summary_list = [f"จุด {d['index']}: {d['display']}" for d in destinat
 origin_txt = origin_display if origin_display else "ไม่ระบุต้นทาง"
 route_summary_str = f"{origin_txt} ➔ " + " ➔ ".join(dest_summary_list)
 
-charged_stops_count = sum(1 for d in destinations_data if d['stop_fee'] > 0)
-
 with col1:
     breakdown_items = [
         f"เส้นทางจัดส่ง ({len(destinations_data)} จุดส่ง): {route_summary_str}",
         trucks_summary_str,
         distance_detail_str,
-        f"ค่าบริการจุดส่งเพิ่ม (เริ่มคิดจุดที่ {start_fee_from_stop} เป็นต้นไป - คิดเงิน {charged_stops_count} จุด)",
+        f"ค่าบริการจุดส่งเพิ่มรวมจากรถทุกคัน",
     ]
     breakdown_costs = [
         "-",
@@ -426,10 +416,13 @@ with col1:
     ]
 
     if show_sub_items:
-        for d in destinations_data:
-            status_str = "ฟรี" if d['stop_fee'] == 0 else f"+{d['stop_fee']:,.2f} ฿"
-            breakdown_items.append(f"  └─ จุดส่งที่ {d['index']} ({d['display']}) [{status_str}]")
-            breakdown_costs.append(d['stop_fee'])
+        if truck_stop_fees_breakdown:
+            for item in truck_stop_fees_breakdown:
+                breakdown_items.append(item["label"])
+                breakdown_costs.append(item["cost"])
+        else:
+            breakdown_items.append("  └─ ไม่มีค่าบริการเพิ่มจุดส่ง")
+            breakdown_costs.append(0.0)
 
     breakdown_items.append(labor_detail_str)
     breakdown_costs.append(total_labor_cost)
@@ -459,15 +452,25 @@ with col1:
     ])
 
     formatted_costs = []
+    formatted_per_tank = []
+
     for c in breakdown_costs:
         if isinstance(c, (int, float)):
             formatted_costs.append(f"{c:,.2f}")
+            if num_tanks > 0:
+                per_tank_val = c / num_tanks
+                formatted_per_tank.append(f"{per_tank_val:,.2f}")
+            else:
+                formatted_per_tank.append("0.00")
         else:
             formatted_costs.append(str(c))
+            formatted_per_tank.append("-")
 
+    # ตารางที่มีทั้งยอดรวม และ ยอดต่อถัง (฿/ถัง)
     df_breakdown = pd.DataFrame({
         "รายการ": breakdown_items,
-        "จำนวนเงิน (บาท)": formatted_costs
+        "จำนวนเงินรวม (บาท)": formatted_costs,
+        "ราคาต่อถัง (บาท/ถัง)": formatted_per_tank
     })
     st.table(df_breakdown)
 
@@ -503,14 +506,11 @@ if len(valid_coords) >= 1:
     
     for d in destinations_data:
         if d["coord"]:
-            icon_color = "orange" if d['stop_fee'] > 0 else "red"
-            fee_text = f"ฟรี" if d['stop_fee'] == 0 else f"+{d['stop_fee']:,.2f} ฿"
-            
             folium.Marker(
                 d["coord"], 
-                popup=f"จุดส่งที่ {d['index']}: {d['display']} [{fee_text}]", 
-                tooltip=f"จุดส่งที่ {d['index']}: {d['display']} [{fee_text}]", 
-                icon=folium.Icon(color=icon_color, icon="flag")
+                popup=f"จุดส่งที่ {d['index']}: {d['display']}", 
+                tooltip=f"จุดส่งที่ {d['index']}: {d['display']}", 
+                icon=folium.Icon(color="red", icon="flag")
             ).add_to(m)
     
     if route_points:
