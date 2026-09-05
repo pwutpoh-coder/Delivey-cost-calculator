@@ -155,10 +155,22 @@ num_tanks = st.sidebar.number_input("จำนวนถังที่ส่ง�
 # 1.2 จุดต้นทาง
 st.sidebar.subheader("📍 จุดต้นทาง (คลัง/ศูนย์กระจายสินค้า)")
 default_raw_origin = loaded_data.get("raw_origin", "") if loaded_data else ""
+default_origin_custom_name = loaded_data.get("origin_custom_name", "") if loaded_data else ""
+
 raw_origin = st.sidebar.text_input("พิกัด/ชื่อสถานที่ต้นทาง", default_raw_origin, placeholder="เช่น 13.7563, 100.5018 หรือ กรุงเทพ")
-loc_origin, origin_display = parse_and_resolve_location(raw_origin)
+loc_origin, resolved_origin_name = parse_and_resolve_location(raw_origin)
+
+origin_custom_name = st.sidebar.text_input("ตั้งชื่อจุดต้นทาง (ถ้าต้องการเปลี่ยน)", default_origin_custom_name, placeholder="เช่น คลังสินค้าหลัก บางนา")
+
+if origin_custom_name.strip():
+    origin_display = origin_custom_name.strip()
+elif resolved_origin_name:
+    origin_display = resolved_origin_name
+else:
+    origin_display = "จุดต้นทาง"
+
 if raw_origin and loc_origin:
-    st.sidebar.caption(f"📍 แปลงเป็น: **{origin_display}**")
+    st.sidebar.caption(f"📍 พิกัดระบบพบ: **{resolved_origin_name}**")
 
 # 1.3 จุดจัดส่งปลายทาง
 st.sidebar.subheader("📍 จุดจัดส่งปลายทาง")
@@ -170,21 +182,40 @@ saved_dest_list = loaded_data.get("destinations", []) if loaded_data else []
 
 for j in range(int(num_destinations)):
     stop_num = j + 1
+    
+    # อ่านค่าเริ่มต้นของสถานที่และชื่อที่เคยบันทึกไว้
+    default_raw = ""
+    default_custom_name = ""
     if j < len(saved_dest_list):
-        default_val = saved_dest_list[j].get("raw", "") if isinstance(saved_dest_list[j], dict) else saved_dest_list[j]
-    else:
-        default_val = ""
+        if isinstance(saved_dest_list[j], dict):
+            default_raw = saved_dest_list[j].get("raw", "")
+            default_custom_name = saved_dest_list[j].get("custom_name", "")
+        else:
+            default_raw = saved_dest_list[j]
 
-    raw_dest = st.sidebar.text_input(f"พิกัด/ชื่อจุดส่งที่ {stop_num}", default_val, key=f"dest_input_{j}", placeholder="ระบุพิกัดหรือชื่อสถานที่")
-    loc_dest, dest_display = parse_and_resolve_location(raw_dest)
+    st.sidebar.markdown(f"**📌 จุดส่งที่ {stop_num}**")
+    raw_dest = st.sidebar.text_input(f"ค้นหาด้วย พิกัด / ชื่อสถานที่ #{stop_num}", default_raw, key=f"dest_input_{j}", placeholder="เช่น 14.35, 100.57 หรือ อยุธยา")
+    loc_dest, resolved_dest_name = parse_and_resolve_location(raw_dest)
+    
+    custom_name = st.sidebar.text_input(f"ตั้งชื่อจุดส่งที่ {stop_num} (ถ้าต้องการเปลี่ยน)", default_custom_name, key=f"dest_name_{j}", placeholder="เช่น สาขาอยุธยา หรือ คลัง B")
+
+    if custom_name.strip():
+        final_display_name = custom_name.strip()
+    elif resolved_dest_name:
+        final_display_name = resolved_dest_name
+    else:
+        final_display_name = f"จุดส่งที่ {stop_num}"
+
     if raw_dest and loc_dest:
-        st.sidebar.caption(f"📍 แปลงเป็น: **{dest_display}**")
+        st.sidebar.caption(f"📍 แปลงพิกัดเป็น: **{resolved_dest_name}**")
     
     destinations_data.append({
         "index": stop_num,
         "raw": raw_dest,
+        "custom_name": custom_name,
         "coord": loc_dest,
-        "display": dest_display if dest_display else f"จุดที่ {stop_num}"
+        "resolved_name": resolved_dest_name,
+        "display": final_display_name
     })
 
 # Map จุดส่งเพื่อให้ค้นหาได้ง่ายขึ้นตาม string label
@@ -400,8 +431,12 @@ if st.sidebar.button("💾 บันทึกข้อมูลนี้", use_c
     if save_preset_name.strip():
         save_payload = {
             "raw_origin": raw_origin,
+            "origin_custom_name": origin_custom_name,
             "num_destinations": num_destinations,
-            "destinations": [d["raw"] for d in destinations_data],
+            "destinations": [
+                {"raw": d["raw"], "custom_name": d["custom_name"]} 
+                for d in destinations_data
+            ],
             "num_trucks": num_trucks,
             "trucks": trucks_save_state,
             "use_distance_cost": use_distance_cost,
@@ -434,8 +469,7 @@ trucks_summary_str = f"ค่าขนส่งพื้นฐานรวม ({
 labor_detail_str = f"ค่าแรงและสวัสดิการเด็กยก ({num_laborers} คน @ คนละ {cost_per_laborer:,.2f} ฿)"
 
 dest_summary_list = [f"จุด {d['index']}: {d['display']}" for d in destinations_data]
-origin_txt = origin_display if origin_display else "ไม่ระบุต้นทาง"
-route_summary_str = f"{origin_txt} ➔ " + " ➔ ".join(dest_summary_list)
+route_summary_str = f"{origin_display} ➔ " + " ➔ ".join(dest_summary_list)
 
 with col1:
     breakdown_items = [
