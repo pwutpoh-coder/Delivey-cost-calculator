@@ -11,69 +11,90 @@ st.set_page_config(
     layout="wide"
 )
 
-# ID ของ Google Sheet จาก URL
+# ID ของ Google Sheet
 SHEET_ID = "1c7fFdgvhebZp5S-BUyAt69bvzAh5rf0ed5arMyGlkHI"
-CSV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv"
+CSV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv"
 
 
 # ---------------------------------------------------------
-# 2. ฟังก์ชันดึงและประมวลผลข้อมูล
+# 2. ฟังก์ชันดึงและประมวลผลข้อมูล (แบบปลอดภัยสูง)
 # ---------------------------------------------------------
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=120)
 def load_data():
     """ดึงข้อมูลจาก Google Sheet และเตรียมพิกัด GPS"""
     try:
+        # ดึงไฟล์ CSV ผ่าน Pandas
         df = pd.read_csv(CSV_URL)
     except Exception as e:
-        return pd.DataFrame(), [], None
+        return None, f"ไม่สามารถโหลดข้อมูลจาก Google Sheet ได้: {str(e)}"
 
-    df.columns = [str(c).strip() for c in df.columns]
-    df = df.loc[:, ~df.columns.duplicated()].copy()
-    
-    # แยกพิกัด GPS
-    if 'พิกัด GPS' in df.columns:
-        gps_split = df['พิกัด GPS'].astype(str).str.split(',', expand=True)
-        if gps_split.shape[1] >= 2:
-            df['lat'] = pd.to_numeric(gps_split[0].str.strip(), errors='coerce')
-            df['lon'] = pd.to_numeric(gps_split[1].str.strip(), errors='coerce')
+    if df.empty:
+        return None, "ไฟล์ Google Sheet ว่างเปล่า ไม่มีข้อมูล"
+
+    try:
+        # ทำความสะอาดชื่อคอลัมน์
+        df.columns = [str(c).strip() for c in df.columns]
+        df = df.loc[:, ~df.columns.duplicated()].copy()
+        
+        # ค้นหาคอลัมน์พิกัด GPS
+        gps_col = None
+        for col in df.columns:
+            if 'พิกัด' in col or 'gps' in col.lower():
+                gps_col = col
+                break
+
+        if gps_col and gps_col in df.columns:
+            gps_split = df[gps_col].astype(str).str.split(',', expand=True)
+            if gps_split.shape[1] >= 2:
+                df['lat'] = pd.to_numeric(gps_split[0].str.strip(), errors='coerce')
+                df['lon'] = pd.to_numeric(gps_split[1].str.strip(), errors='coerce')
+            else:
+                df['lat'] = np.nan
+                df['lon'] = np.nan
         else:
             df['lat'] = np.nan
             df['lon'] = np.nan
-    else:
-        df['lat'] = np.nan
-        df['lon'] = np.nan
-    
-    # ลบจุดที่ไม่มี GPS
-    df = df.dropna(subset=['lat', 'lon']).copy()
-    
-    # สร้างคอลัมน์ชื่อจุดพิกัด
-    if 'รหัสสมาชิก' in df.columns and 'ชื่อ-นามสกุล' in df.columns:
-        df['point_label'] = df['รหัสสมาชิก'].astype(str) + " - " + df['ชื่อ-นามสกุล'].astype(str)
-    elif 'รหัสสมาชิก' in df.columns:
-        df['point_label'] = df['รหัสสมาชิก'].astype(str)
-    else:
-        df['point_label'] = df.index.astype(str)
-    
-    month_cols = [c for c in df.columns if c.startswith('ยอดส่ง/เดือน')]
-    latest_month_col = month_cols[-1] if len(month_cols) > 0 else None
-    
-    for col in month_cols:
-        df[col] = pd.to_numeric(
-            df[col].astype(str).str.replace(',', '').str.strip(), 
-            errors='coerce'
-        ).fillna(0)
         
-    return df, month_cols, latest_month_col
+        # กรองเอาเฉพาะแถวที่มีพิกัดถูกต้อง
+        df = df.dropna(subset=['lat', 'lon']).copy()
+        df = df[(df['lat'] >= -90) & (df['lat'] <= 90) & (df['lon'] >= -180) & (df['lon'] <= 180)]
+
+        if df.empty:
+            return None, "ไม่พบข้อมูลพิกัด GPS ที่ถูกต้องในไฟล์ (ตรวจสอบรูปแบบ เช่น 13.7563, 100.5018)"
+        
+        # สร้างคอลัมน์ชื่อจุดพิกัด
+        if 'รหัสสมาชิก' in df.columns and 'ชื่อ-นามสกุล' in df.columns:
+            df['point_label'] = df['รหัสสมาชิก'].astype(str) + " - " + df['ชื่อ-นามสกุล'].astype(str)
+        elif 'รหัสสมาชิก' in df.columns:
+            df['point_label'] = df['รหัสสมาชิก'].astype(str)
+        else:
+            df['point_label'] = df.index.astype(str)
+        
+        month_cols = [c for c in df.columns if 'ยอดส่ง' in str(c)]
+        
+        for col in month_cols:
+            df[col] = pd.to_numeric(
+                df[col].astype(str).str.replace(',', '').str.strip(), 
+                errors='coerce'
+            ).fillna(0)
+            
+        return df, month_cols
+    except Exception as e:
+        return None, f"เกิดข้อผิดพลาดในการประมวลผลข้อมูล: {str(e)}"
 
 
 # ---------------------------------------------------------
 # 3. โหลดข้อมูล
 # ---------------------------------------------------------
-df, month_cols, default_latest_col = load_data()
+result, err_msg = load_data()
 
-if df.empty:
-    st.error("❌ ไม่พบข้อมูลพิกัด GPS หรือไม่สามารถดึงข้อมูลจาก Google Sheet ได้")
+if result is None:
+    st.error(f"❌ {err_msg}")
+    st.info("💡 **ข้อแนะนำในการแก้ไข:**\n1. ตรวจสอบ Google Sheet ว่าเปิดสิทธิ์เป็น 'anyone with the link can view' แล้วหรือยัง\n2. ตรวจสอบว่าในชีตมีคอลัมน์ 'พิกัด GPS' หรือไม่")
     st.stop()
+
+df = result[0] if isinstance(result, tuple) else result
+month_cols = result[1] if isinstance(result, tuple) else []
 
 
 # ---------------------------------------------------------
@@ -81,14 +102,13 @@ if df.empty:
 # ---------------------------------------------------------
 st.sidebar.title("⚙️ แผงควบคุม (Controls)")
 
+selected_month_col = None
 if month_cols:
     selected_month_col = st.sidebar.selectbox(
         "เลือกคอลัมน์ยอดส่งสำหรับขนาดจุด:",
         options=month_cols,
         index=len(month_cols) - 1
     )
-else:
-    selected_month_col = None
 
 radius_multiplier = st.sidebar.slider(
     "ปรับขนาดจุดพิกัด:",
@@ -115,7 +135,7 @@ if 'เบอร์รถ' in filtered_df.columns and selected_car:
 
 
 # ---------------------------------------------------------
-# 5. ฟังก์ชันเรนเดอร์แผนที่แบบ Streamlit Native Map
+# 5. ฟังก์ชันเรนเดอร์แผนที่
 # ---------------------------------------------------------
 HEX_COLORS = [
     "#FF2A6D", "#05D9E8", "#FFC300", "#00FF66",
@@ -155,7 +175,6 @@ def render_map(data, color_column, key_suffix=""):
         )
         st.session_state[session_key] = selected_points
 
-    # เตรียมข้อมูลสำหรับแผนที่ Native Map
     map_data = data.copy()
 
     # คำนวณขนาด
@@ -220,14 +239,20 @@ tab1, tab2, tab3 = st.tabs([
 with tab1:
     if 'คลัง' in filtered_df.columns:
         render_map(filtered_df, 'คลัง', key_suffix="t1")
+    else:
+        st.warning("ไม่พบข้อมูลคอลัมน์ 'คลัง'")
 
 with tab2:
     if 'เบอร์รถ' in filtered_df.columns:
         render_map(filtered_df, 'เบอร์รถ', key_suffix="t2")
+    else:
+        st.warning("ไม่พบข้อมูลคอลัมน์ 'เบอร์รถ'")
 
 with tab3:
     if 'รอบส่งประจำสัปดาห์' in filtered_df.columns:
         render_map(filtered_df, 'รอบส่งประจำสัปดาห์', key_suffix="t3")
+    else:
+        st.warning("ไม่พบข้อมูลคอลัมน์ 'รอบส่งประจำสัปดาห์'")
 
 st.divider()
 
