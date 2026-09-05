@@ -226,7 +226,6 @@ for i in range(int(num_trucks)):
     
     stops_count = len(assigned_stops)
     
-    # ย้ายการตั้งค่าค่าบริการเพิ่มจุดมาไว้ตรงนี้
     t_start_fee_from = st.sidebar.number_input(
         f"เริ่มคิดค่าส่งเพิ่มคันที่ {i+1} ตั้งแต่จุดที่เท่าไร?",
         min_value=1,
@@ -466,7 +465,6 @@ with col1:
             formatted_costs.append(str(c))
             formatted_per_tank.append("-")
 
-    # ตารางที่มีทั้งยอดรวม และ ยอดต่อถัง (฿/ถัง)
     df_breakdown = pd.DataFrame({
         "รายการ": breakdown_items,
         "จำนวนเงินรวม (บาท)": formatted_costs,
@@ -490,34 +488,38 @@ st.header("🗺️ 2. แผนที่แสดงจุดจัดส่ง�
 
 valid_coords = [c for c in all_coords if c is not None]
 
+# กำหนดค่าเริ่มต้นแผนที่ (หากยังไม่มีการใส่พิกัด ให้แสดงแผนที่กรุงเทพฯ เป็นค่าเริ่มต้น)
 if len(valid_coords) >= 1:
     avg_lat = sum(c[0] for c in valid_coords) / len(valid_coords)
     avg_lon = sum(c[1] for c in valid_coords) / len(valid_coords)
-    
-    m = folium.Map(location=[avg_lat, avg_lon], zoom_start=9)
-    
-    if loc_origin:
-        folium.Marker(
-            loc_origin, 
-            popup=f"ต้นทาง: {origin_display}", 
-            tooltip=f"ต้นทาง: {origin_display}", 
-            icon=folium.Icon(color="green", icon="play")
-        ).add_to(m)
-    
-    for d in destinations_data:
-        if d["coord"]:
-            folium.Marker(
-                d["coord"], 
-                popup=f"จุดส่งที่ {d['index']}: {d['display']}", 
-                tooltip=f"จุดส่งที่ {d['index']}: {d['display']}", 
-                icon=folium.Icon(color="red", icon="flag")
-            ).add_to(m)
-    
-    if route_points:
-        folium.PolyLine(route_points, color="blue", weight=5, opacity=0.8, tooltip=f"ระยะทางรวม {auto_distance_km:,.2f} กม.").add_to(m)
-    elif len(valid_coords) >= 2:
-        folium.PolyLine(valid_coords, color="gray", weight=3, opacity=0.5, dash_array="5, 10").add_to(m)
-    
-    st_folium(m, width=1000, height=450)
+    zoom_level = 9
 else:
-    st.info("💡 กรุณาระบุพิกัดต้นทางและจุดส่ง เพื่อแสดงเส้นทางบนแผนที่")
+    avg_lat, avg_lon = 13.7563, 100.5018  # พิกัดกรุงเทพมหานคร
+    zoom_level = 6  # ซูมระดับกว้างเพื่อให้เห็นประเทศไทย
+
+m = folium.Map(location=[avg_lat, avg_lon], zoom_start=zoom_level)
+
+if loc_origin:
+    folium.Marker(
+        loc_origin, 
+        popup=f"ต้นทาง: {origin_display}", 
+        tooltip=f"ต้นทาง: {origin_display}", 
+        icon=folium.Icon(color="green", icon="play")
+    ).add_to(m)
+
+for d in destinations_data:
+    if d["coord"]:
+        folium.Marker(
+            d["coord"], 
+            popup=f"จุดส่งที่ {d['index']}: {d['display']}", 
+            tooltip=f"จุดส่งที่ {d['index']}: {d['display']}", 
+            icon=folium.Icon(color="red", icon="flag")
+        ).add_to(m)
+
+if route_points:
+    folium.PolyLine(route_points, color="blue", weight=5, opacity=0.8, tooltip=f"ระยะทางรวม {auto_distance_km:,.2f} กม.").add_to(m)
+elif len(valid_coords) >= 2:
+    folium.PolyLine(valid_coords, color="gray", weight=3, opacity=0.5, dash_array="5, 10").add_to(m)
+
+# แสดงผลแผนที่เสมอ ไม่ว่าจะกรอกพิกัดแล้วหรือยังก็ตาม
+st_folium(m, width=1000, height=450)
