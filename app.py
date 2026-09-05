@@ -7,15 +7,41 @@ import requests
 import json
 import os
 
-# ตั้งค่าหน้าเว็บ
-st.set_page_config(page_title="ระบบคำนวณค่าขนส่งถัง", layout="wide")
+# 1. ตั้งค่าหน้าเว็บแบบ Responsive (initial_sidebar_state="auto")
+st.set_page_config(
+    page_title="ระบบคำนวณค่าขนส่งถัง", 
+    layout="wide",
+    initial_sidebar_state="auto"
+)
+
+# 2. ปรับแต่ง CSS เพิ่มเติมเพื่อให้รองรับหน้าจอมือถือได้ดีขึ้น
+st.markdown("""
+    <style>
+    /* ปรับแต่งตารางให้ไม่ล้นหน้าจอมือถือ */
+    .stTable {
+        width: 100% !important;
+        overflow-x: auto;
+    }
+    /* ปรับขนาดตัวอักษรของ Metric ให้พอดีบนหน้าจอเล็ก */
+    [data-testid="stMetricValue"] {
+        font-size: clamp(1.5rem, 4vw, 2.2rem) !important;
+    }
+    /* เพิ่ม Padding ด้านข้างบนมือถือ */
+    .block-container {
+        padding-left: 1rem !important;
+        padding-right: 1rem !important;
+        padding-top: 2rem !important;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
 st.title("🚚 แพลตฟอร์มคำนวณค่าขนส่งและวางแผนเส้นทาง")
 
 # Initialize geolocator
 geolocator = ArcGIS(timeout=10)
 HISTORY_FILE = "history_data.json"
 
-# จานสีสำหรับรถแต่ละคัน (รองรับสูงสุด 10 สี และวนซ้ำได้)
+# จานสีสำหรับรถแต่ละคัน
 ROUTE_COLORS = [
     {"line": "#1f77b4", "marker": "blue"},
     {"line": "#ff7f0e", "marker": "orange"},
@@ -98,7 +124,7 @@ def parse_and_resolve_location(text_input):
         pass
     return None, text
 
-# --- ฟังก์ชันคำนวณระยะทางและเส้นทางหลายจุด (Multi-stop Routing) ---
+# --- ฟังก์ชันคำนวณระยะทางและเส้นทางหลายจุด ---
 def get_multi_stop_route(coords_list):
     if len(coords_list) < 2:
         return 0.0, []
@@ -119,10 +145,10 @@ def get_multi_stop_route(coords_list):
         pass
     return 0.0, []
 
-# โหลดประวัติที่มีอยู่
+# โหลดประวัติ
 history_dict = load_history()
 
-# --- ส่วนจัดการประวัติและเซฟข้อมูล (Sidebar - Top) ---
+# --- แถบข้างจัดการประวัติ (Sidebar - Top) ---
 st.sidebar.header("📁 จัดการและบันทึกประวัติ")
 
 selected_preset_name = st.sidebar.selectbox(
@@ -144,10 +170,10 @@ if loaded_data and col_del.button("🗑️ ลบรายการนี้", u
 
 st.sidebar.markdown("---")
 
-# --- ส่วนที่ 1: แถบข้างสำหรับกรอกข้อมูลและตั้งค่า (Sidebar) ---
+# --- ส่วนที่ 1: แถบข้างสำหรับกรอกข้อมูลและตั้งค่า ---
 st.sidebar.header("⚙️ กำหนดค่าและปัจจัยการคำนวณ")
 
-# 1.1 รับจำนวนถังสินค้าหลักก่อน
+# 1.1 จำนวนถังสินค้าหลัก
 st.sidebar.subheader("📦 จำนวนสินค้าหลัก")
 default_num_tanks = loaded_data.get("num_tanks", 0) if loaded_data else 0
 num_tanks = st.sidebar.number_input("จำนวนถังที่ส่งทั้งหมด (ถัง)", min_value=0, value=int(default_num_tanks), step=10)
@@ -183,7 +209,6 @@ saved_dest_list = loaded_data.get("destinations", []) if loaded_data else []
 for j in range(int(num_destinations)):
     stop_num = j + 1
     
-    # อ่านค่าเริ่มต้นของสถานที่และชื่อที่เคยบันทึกไว้
     default_raw = ""
     default_custom_name = ""
     if j < len(saved_dest_list):
@@ -218,10 +243,9 @@ for j in range(int(num_destinations)):
         "display": final_display_name
     })
 
-# Map จุดส่งเพื่อให้ค้นหาได้ง่ายขึ้นตาม string label
 dest_map = {f"จุดส่งที่ {d['index']}: {d['display']}": d for d in destinations_data}
 
-# 1.4 รถและการมอบหมายจุดส่ง พร้อมค่าบริการเพิ่มต่อจุด
+# 1.4 รถและการมอบหมายจุดส่ง
 st.sidebar.subheader("🚚 เงื่อนไขการขนส่งและตั้งค่าต่อคัน")
 default_num_trucks = loaded_data.get("num_trucks", 1) if loaded_data else 1
 num_trucks = st.sidebar.number_input("จำนวนรถที่ใช้ (คัน)", min_value=1, value=int(default_num_trucks), step=1)
@@ -230,7 +254,7 @@ saved_trucks_list = loaded_data.get("trucks", []) if loaded_data else []
 
 truck_details = []
 trucks_save_state = []
-truck_routes_info = [] # เก็บพิกัดและเส้นทาง OSRM รายคัน
+truck_routes_info = []
 total_base_trip_cost = 0.0
 total_extra_stop_fee = 0.0
 truck_stop_fees_breakdown = []
@@ -273,7 +297,6 @@ for i in range(int(num_trucks)):
     
     stops_count = len(assigned_stops)
     
-    # คำนวณเส้นทางและระยะทางเฉพาะคันนี้
     truck_coords = []
     if loc_origin:
         truck_coords.append(loc_origin)
@@ -342,7 +365,7 @@ for i in range(int(num_trucks)):
 
     total_base_trip_cost += float(t_cost)
 
-# 1.5 คำนวณระยะทางรวมอัตโนมัติ
+# 1.5 เงื่อนไขระยะทาง
 st.sidebar.subheader("📏 เงื่อนไขระยะทาง")
 distance_km = st.sidebar.number_input(
     "ระยะทางรวมทุกคัน (กิโลเมตร)", 
@@ -419,11 +442,11 @@ st.sidebar.subheader("📦 ค่ายกถังเพิ่มเติม")
 default_lifting_fee = loaded_data.get("lifting_fee_per_tank", 0.0) if loaded_data else 0.0
 lifting_fee_per_tank = st.sidebar.number_input("ค่ายกต่อถัง (บาท)", min_value=0.0, value=float(default_lifting_fee), step=1.0, format="%.2f")
 
-# 1.8 ตั้งค่าการแสดงผลตารางราคา
+# 1.8 การแสดงผลตารางราคา
 st.sidebar.subheader("👁️ การแสดงผลตารางสรุปราคา")
 show_sub_items = st.sidebar.checkbox("แสดงรายการย่อยในตารางสรุปราคา (จุดส่งเพิ่ม / รายละเอียดค่าแรง)", value=True)
 
-# --- ส่วนเซฟข้อมูลลงไฟล์ ---
+# --- ส่วนเซฟข้อมูล ---
 st.sidebar.markdown("---")
 st.sidebar.subheader("💾 บันทึกการตั้งค่าปัจจุบัน")
 save_preset_name = st.sidebar.text_input("ตั้งชื่อรายการสำหรับบันทึก", placeholder="เช่น รายการส่งถังประจำวัน")
@@ -460,10 +483,11 @@ total_lifting_fee = lifting_fee_per_tank * num_tanks
 total_shipping_cost = total_base_trip_cost + distance_cost + total_labor_cost + total_lifting_fee + total_extra_stop_fee
 cost_per_tank = total_shipping_cost / num_tanks if num_tanks > 0 else 0.0
 
-# --- ส่วนที่ 3: แสดงผลตารางสรุปราคา ---
+# --- ส่วนที่ 3: แสดงผลตารางสรุปราคา (ปรับให้ Responsive สำหรับทั้ง PC และ มือถือ) ---
 st.header("📊 1. ตารางราคาค่าขนส่งและรายละเอียด")
 
-col1, col2 = st.columns([2.2, 1])
+# ใช้อัตราส่วนคอลัมน์ที่ยืดหยุ่นได้บน PC และจะถูก Stack อัตโนมัติบนมือถือ
+col1, col2 = st.columns([2, 1])
 
 trucks_summary_str = f"ค่าขนส่งพื้นฐานรวม ({num_trucks} คัน: {', '.join(truck_details)})"
 labor_detail_str = f"ค่าแรงและสวัสดิการเด็กยก ({num_laborers} คน @ คนละ {cost_per_laborer:,.2f} ฿)"
@@ -541,7 +565,7 @@ with col1:
         "จำนวนเงินรวม (บาท)": formatted_costs,
         "ราคาต่อถัง (บาท/ถัง)": formatted_per_tank
     })
-    st.table(df_breakdown)
+    st.dataframe(df_breakdown, use_container_width=True, hide_index=True)
 
 with col2:
     st.metric(label="🎯 ค่าขนส่งรวมทั้งหมด", value=f"{total_shipping_cost:,.2f} บาท")
@@ -554,7 +578,7 @@ with col2:
 
 st.markdown("---")
 
-# --- ส่วนที่ 4: แสดงผลแผนที่ ---
+# --- ส่วนที่ 4: แสดงผลแผนที่ (ปรับขนาดแบบ Responsive) ---
 st.header("🗺️ 2. แผนที่แสดงจุดจัดส่งและเส้นทางถนนจริง (แยกสีตามคันรถ)")
 
 all_valid_coords = []
@@ -564,18 +588,17 @@ for d in destinations_data:
     if d["coord"]:
         all_valid_coords.append(d["coord"])
 
-# กำหนดค่าเริ่มต้นแผนที่
 if len(all_valid_coords) >= 1:
     avg_lat = sum(c[0] for c in all_valid_coords) / len(all_valid_coords)
     avg_lon = sum(c[1] for c in all_valid_coords) / len(all_valid_coords)
     zoom_level = 9
 else:
-    avg_lat, avg_lon = 13.7563, 100.5018  # พิกัดกรุงเทพมหานคร
+    avg_lat, avg_lon = 13.7563, 100.5018
     zoom_level = 6
 
 m = folium.Map(location=[avg_lat, avg_lon], zoom_start=zoom_level)
 
-# 1. หมุดจุดต้นทาง
+# หมุดจุดต้นทาง
 if loc_origin:
     folium.Marker(
         loc_origin, 
@@ -584,14 +607,13 @@ if loc_origin:
         icon=folium.Icon(color="black", icon="play", prefix="fa")
     ).add_to(m)
 
-# 2. วาดเส้นทางและปักหมุดจุดส่งแยกตามคันรถ
+# วาดเส้นทางและหมุดจุดส่งแยกคัน
 for t_info in truck_routes_info:
     t_idx = t_info["truck_index"]
     t_type = t_info["truck_type"]
     color_line = t_info["color"]["line"]
     color_marker = t_info["color"]["marker"]
     
-    # วาดเส้นทาง OSRM ของรถคันนี้
     if t_info["route_points"]:
         folium.PolyLine(
             t_info["route_points"], 
@@ -610,7 +632,6 @@ for t_info in truck_routes_info:
             tooltip=f"คันที่ {t_idx} ({t_type}) - เส้นตรงจำลอง"
         ).add_to(m)
 
-    # ปักหมุดเฉพาะจุดส่งที่รถคันนี้ได้รับมอบหมาย
     for stop_item in t_info["assigned_stops"]:
         if stop_item["coord"]:
             folium.Marker(
@@ -620,7 +641,7 @@ for t_info in truck_routes_info:
                 icon=folium.Icon(color=color_marker, icon="flag")
             ).add_to(m)
 
-# ปักหมุดจุดส่งที่ยังไม่ถูกมอบหมายให้รถคันใดเลย (ถ้ามี)
+# หมุดที่ยังไม่มอบหมาย
 assigned_dest_indices = set()
 for t_info in truck_routes_info:
     for s in t_info["assigned_stops"]:
@@ -635,5 +656,5 @@ for d in destinations_data:
             icon=folium.Icon(color="gray", icon="info-sign")
         ).add_to(m)
 
-# แสดงผลแผนที่
-st_folium(m, width=1000, height=450)
+# แสดงแผนที่แบบ Responsive (ความกว้าง 100% ตามขนาดจอ)
+st_folium(m, width="100%", height=400)
