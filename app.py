@@ -133,7 +133,7 @@ st.sidebar.markdown("---")
 # --- ส่วนที่ 1: แถบข้างสำหรับกรอกข้อมูลและตั้งค่า (Sidebar) ---
 st.sidebar.header("⚙️ กำหนดค่าและปัจจัยการคำนวณ")
 
-# 1.1 รับจำนวนถังสินค้าหลักก่อน (ใช้ร่วมกับการคำนวณราคาต่อถัง)
+# 1.1 รับจำนวนถังสินค้าหลักก่อน
 st.sidebar.subheader("📦 จำนวนสินค้าหลัก")
 default_num_tanks = loaded_data.get("num_tanks", 0) if loaded_data else 0
 num_tanks = st.sidebar.number_input("จำนวนถังที่ส่งทั้งหมด (ถัง)", min_value=0, value=int(default_num_tanks), step=10)
@@ -218,7 +218,7 @@ for j in range(int(num_destinations)):
     })
     total_extra_stop_fee += float(stop_fee)
 
-# 1.4 รถและการมอบหมายจุดส่ง (เพิ่มเงื่อนไขคิดราคาต่อถัง)
+# 1.4 รถและการมอบหมายจุดส่ง
 st.sidebar.subheader("🚚 เงื่อนไขการขนส่งและประเภทรถ")
 default_num_trucks = loaded_data.get("num_trucks", 1) if loaded_data else 1
 num_trucks = st.sidebar.number_input("จำนวนรถที่ใช้ (คัน)", min_value=1, value=int(default_num_trucks), step=1)
@@ -226,14 +226,17 @@ num_trucks = st.sidebar.number_input("จำนวนรถที่ใช้ (�
 saved_trucks_list = loaded_data.get("trucks", []) if loaded_data else []
 
 truck_details = []
+trucks_save_state = []  # เก็บสถานะไว้เซฟลงไฟล์
 total_base_trip_cost = 0.0
 
 for i in range(int(num_trucks)):
     st.sidebar.markdown(f"**🚛 คันที่ {i+1}**")
     
-    default_truck_type = saved_trucks_list[i].get("type", "รถกระบะ 4 ล้อ") if i < len(saved_trucks_list) else "รถกระบะ 4 ล้อ"
-    default_calc_mode = saved_trucks_list[i].get("calc_mode", "เหมาจ่ายต่อเที่ยว") if i < len(saved_trucks_list) else "เหมาจ่ายต่อเที่ยว"
-    default_rate = saved_trucks_list[i].get("rate", 0.0) if i < len(saved_trucks_list) else 0.0
+    # โหลดค่าจากไฟล์เดิมถ้ามี
+    saved_truck = saved_trucks_list[i] if i < len(saved_trucks_list) else {}
+    default_truck_type = saved_truck.get("type", "รถกระบะ 4 ล้อ")
+    default_calc_mode = saved_truck.get("calc_mode", "เหมาจ่ายต่อเที่ยว")
+    default_rate = saved_truck.get("rate", 0.0)
     
     type_options = ["รถกระบะ 4 ล้อ", "รถ 6 ล้อ", "รถ 10 ล้อ"]
     type_index = type_options.index(default_truck_type) if default_truck_type in type_options else 0
@@ -263,6 +266,13 @@ for i in range(int(num_trucks)):
         truck_details.append(f"{t_type} ({t_cost:,.2f} ฿ [เหมา] - วิ่ง {stops_count} จุด)")
     else:
         truck_details.append(f"{t_type} ({t_rate:,.2f} ฿/ถัง x {num_tanks} ถัง = {t_cost:,.2f} ฿ - วิ่ง {stops_count} จุด)")
+
+    # สะสมค่าไว้เตรียม บันทึก (Save)
+    trucks_save_state.append({
+        "type": t_type,
+        "calc_mode": t_calc_mode,
+        "rate": float(t_rate)
+    })
 
     total_base_trip_cost += float(t_cost)
 
@@ -365,13 +375,7 @@ if st.sidebar.button("💾 บันทึกข้อมูลนี้", use_c
             "default_extra_fee_amount": default_extra_fee_amount,
             "destinations": [{"raw": d["raw"], "stop_fee": d["stop_fee"]} for d in destinations_data],
             "num_trucks": num_trucks,
-            "trucks": [
-                {
-                    "type": st.session_state.get(f"truck_type_{i}", "รถกระบะ 4 ล้อ"),
-                    "calc_mode": st.session_state.get(f"truck_mode_{i}", "เหมาจ่ายต่อเที่ยว"),
-                    "rate": st.session_state.get(f"truck_rate_{i}", 0.0)
-                } for i in range(int(num_trucks))
-            ],
+            "trucks": trucks_save_state,  # เซฟข้อมูลรถแบบครบถ้วน (type, calc_mode, rate)
             "use_distance_cost": use_distance_cost,
             "base_free_km": base_free_km,
             "cost_per_km": cost_per_km,
