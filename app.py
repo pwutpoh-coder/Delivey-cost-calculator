@@ -27,7 +27,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# ปรับขนาดหัวข้อหลักให้เล็กลงมานิดเดียว (ใช้ h2 แทน title)
+# ปรับขนาดหัวข้อหลัก
 st.markdown("<h2 style='margin-bottom: 1rem;'>🚚 แพลตฟอร์มคำนวณค่าขนส่งและวางแผนเส้นทาง</h2>", unsafe_allow_html=True)
 
 # Initialize geolocator
@@ -158,7 +158,6 @@ if loaded_data and col_del.button("🗑️ ลบรายการนี้", u
 
 # สำรอง/นำเข้าไฟล์ประวัติ JSON
 with st.sidebar.expander("📥 Export / Import สำรองไฟล์ประวัติ"):
-    # Download JSON
     json_str = json.dumps(history_dict, ensure_ascii=False, indent=4)
     st.download_button(
         label="💾 ดาวน์โหลดไฟล์ประวัติ (Backup JSON)",
@@ -168,7 +167,6 @@ with st.sidebar.expander("📥 Export / Import สำรองไฟล์ปร
         use_container_width=True
     )
     
-    # Upload JSON
     uploaded_file = st.file_uploader("📂 อัปโหลดไฟล์ประวัติกลับเข้ามาระบบ", type=["json"])
     if uploaded_file is not None:
         try:
@@ -466,7 +464,8 @@ total_shipping_cost = (
 )
 cost_per_tank = total_shipping_cost / num_tanks if num_tanks > 0 else 0.0
 
-st.header("📊 1. ตารางราคาค่าขนส่งและรายละเอียด")
+# ปรับขนาดหัวข้อส่วนที่ 1 ให้เล็กลงมานิดเดียว (ใช้ h3 แทน header)
+st.markdown("<h3 style='margin-bottom: 0.8rem;'>📊 1. ตารางราคาค่าขนส่งและรายละเอียด</h3>", unsafe_allow_html=True)
 col1, col2 = st.columns([2, 1])
 
 trucks_summary_str = f"ค่าขนส่งพื้นฐานรวม ({num_trucks} คัน: {', '.join(truck_details)})"
@@ -559,7 +558,8 @@ with col2:
 st.markdown("---")
 
 # --- ส่วนที่ 4: แสดงผลแผนที่ ---
-st.header("🗺️ 2. แผนที่แสดงจุดจัดส่งและเส้นทางถนนจริง (แยกสีตามคันรถ)")
+# ปรับขนาดหัวข้อส่วนที่ 2 ให้เล็กลงมานิดเดียว (ใช้ h3 แทน header)
+st.markdown("<h3 style='margin-bottom: 0.8rem;'>🗺️ 2. แผนที่แสดงจุดจัดส่งและเส้นทางถนนจริง (แยกสีตามคันรถ)</h3>", unsafe_allow_html=True)
 
 all_valid_coords = [loc_origin] if loc_origin else []
 all_valid_coords.extend([d["coord"] for d in destinations_data if d["coord"]])
