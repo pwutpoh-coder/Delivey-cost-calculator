@@ -3,7 +3,7 @@ import pandas as pd
 import json
 import io
 
-# ตั้งค่าหน้าตาของแอป
+# ตั้งค่าหน้าตาของแอป (ต้องอยู่บรรทัดแรกสุดของคำสั่ง Streamlit)
 st.set_page_config(
     page_title="ระบบคำนวณและจัดการค่าขนส่ง / ค่าเช่าโฟล์คลิฟท์",
     page_layout="wide"
@@ -13,7 +13,7 @@ st.title("🚛 ระบบคำนวณและจัดการค่า�
 st.markdown("---")
 
 # Initialize Session State สำหรับเก็บรายการคำนวณ
-if 'records' not in st.mutable_status if hasattr(st, 'mutable_status') else 'records' not in st.session_state:
+if 'records' not in st.session_state:
     st.session_state.records = []
 
 # ==========================================
@@ -55,7 +55,6 @@ col_left, col_right = st.columns(2)
 with col_left:
     st.subheader("1. ข้อมูลรถขนส่ง")
     
-    # รายการชนิดรถที่ต้องการ
     vehicle_types = [
         "รถกระบะ4ล้อ",
         "รถ6ล้อ",
@@ -95,7 +94,6 @@ with col_right:
             if forklift_option == "ค่าเช่ารถโฟล์คลิฟท์แยกกับคนขับรถ":
                 driver_fee_per_day = st.number_input("ค่าคนขับรถต่อคน/วัน (บาท)", min_value=0.0, value=0.0, step=300.0)
         
-        # คำนวณราคารวมโฟล์คลิฟท์
         if forklift_option == "ค่าเช่ารถโฟล์คลิฟท์รวมคนขับรถ":
             total_forklift_cost = forklift_count * forklift_days * forklift_price_per_day
         else:
@@ -103,7 +101,6 @@ with col_right:
             
     st.info(f"🏗️ รวมค่าเช่ารถโฟล์คลิฟท์: **{total_forklift_cost:,.2f}** บาท")
 
-# ส่วนสรุปและบันทึกรายการ
 st.markdown("---")
 customer_name = st.text_input("ชื่อลูกค้า / ชื่อโครงการ", placeholder="กรอกชื่อลูกค้าหรือหมายเลขอ้างอิง")
 grand_total = total_vehicle_cost + total_forklift_cost
@@ -140,10 +137,8 @@ st.header("📊 ตารางรายการสรุปทั้งหม�
 if st.session_state.records:
     df = pd.DataFrame(st.session_state.records)
     
-    # แสดงผลตาราง
     st.dataframe(df, use_container_width=True)
     
-    # คำนวณสรุปรวมทั้งหมด
     total_all_projects = df["ราคารวมสุทธิ (บาท)"].sum()
     st.metric("ราคารวมสุทธิทุกโครงการ", f"{total_all_projects:,.2f} บาท")
     
@@ -172,7 +167,6 @@ if st.session_state.records:
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
     
-    # ปุ่มล้างข้อมูลทั้งหมด
     if exp_col3.button("🗑️ ล้างข้อมูลตารางทั้งหมด"):
         st.session_state.records = []
         st.rerun()
