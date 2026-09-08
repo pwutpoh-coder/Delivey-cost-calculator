@@ -1,18 +1,19 @@
 import streamlit as st
-import pandas as pd
-import json
-import io
 
-# ตั้งค่าหน้าตาของแอป (ต้องอยู่บรรทัดแรกสุดของคำสั่ง Streamlit)
+# MUST BE THE FIRST STREAMLIT COMMAND
 st.set_page_config(
     page_title="ระบบคำนวณและจัดการค่าขนส่ง / ค่าเช่าโฟล์คลิฟท์",
     page_layout="wide"
 )
 
+import pandas as pd
+import json
+import io
+
 st.title("🚛 ระบบคำนวณและจัดการค่าขนส่ง / ค่าเช่ารถโฟล์คลิฟท์")
 st.markdown("---")
 
-# Initialize Session State สำหรับเก็บรายการคำนวณ
+# Initialize Session State
 if 'records' not in st.session_state:
     st.session_state.records = []
 
