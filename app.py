@@ -1,10 +1,13 @@
 import streamlit as st
 
-# MUST BE THE FIRST STREAMLIT COMMAND
-st.set_page_config(
-    page_title="ระบบคำนวณและจัดการค่าขนส่ง / ค่าเช่าโฟล์คลิฟท์",
-    page_layout="wide"
-)
+# ป้องกัน Error ใน Python 3.14 ด้วย try-except
+try:
+    st.set_page_config(
+        page_title="ระบบคำนวณและจัดการค่าขนส่ง / ค่าเช่าโฟล์คลิฟท์",
+        page_layout="wide"
+    )
+except st.errors.StreamlitAPIException:
+    pass
 
 import pandas as pd
 import json
