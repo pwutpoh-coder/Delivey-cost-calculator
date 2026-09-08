@@ -6,6 +6,14 @@ from geopy.geocoders import ArcGIS
 import requests
 import json
 import os
+import io
+
+# นำเข้า ReportLab สำหรับสร้าง PDF ภาษาไทย
+from reportlab.lib.pagesizes import A4
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib import colors
+from reportlab.pdfgen import canvas
 
 # 1. ตั้งค่าหน้าเว็บแบบ Responsive
 st.set_page_config(
@@ -118,7 +126,6 @@ def get_multi_stop_route(coords_list):
     
     loc_str = ";".join([f"{c[1]},{c[0]}" for c in coords_list])
     try:
-        # เปลี่ยนเป็น https เพื่อป้องกัน Mixed Content บน Cloud
         osrm_url = f"https://router.project-osrm.org/route/v1/driving/{loc_str}?overview=full&geometries=geojson"
         response = requests.get(osrm_url, timeout=5)
         data = response.json()
@@ -132,6 +139,51 @@ def get_multi_stop_route(coords_list):
     except Exception:
         pass
     return 0.0, []
+
+# ฟังก์ชันแปลง DataFrame เป็น Excel Bytes
+def convert_df_to_excel(df):
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df.to_excel(writer, index=False, sheet_name='Summary')
+    return output.getvalue()
+
+# ฟังก์ชันสร้าง PDF ภาษาไทย
+def generate_pdf(df_data, total_cost, cost_per_tank):
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
+    story = []
+    
+    # โหลดฟอนต์ภาษาไทย Tahoma หรือระบบที่มี
+    styles = getSampleStyleSheet()
+    normal_style = ParagraphStyle('Normal_TH', parent=styles['Normal'], fontName='Helvetica', fontSize=10, leading=14)
+    title_style = ParagraphStyle('Title_TH', parent=styles['Heading1'], fontName='Helvetica-Bold', fontSize=16, leading=20, alignment=1)
+
+    story.append(Paragraph("ใบสรุปรายการและคำนวณค่าขนส่ง", title_style))
+    story.append(Spacer(1, 15))
+
+    table_data = [["รายการ", "จำนวนเงินรวม (บาท)", "ราคาต่อถัง (บาท/ถัง)"]]
+    for idx, row in df_data.iterrows():
+        table_data.append([str(row["รายการ"]), str(row["จำนวนเงินรวม (บาท)"]), str(row["ราคาต่อถัง (บาท/ถัง)"])])
+
+    t = Table(table_data, colWidths=[280, 120, 120])
+    t.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#f0f2f6")),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.black),
+        ('ALIGN', (0,0), (-1,-1), 'LEFT'),
+        ('ALIGN', (1,0), (-1,-1), 'RIGHT'),
+        ('FONTNAME', (0,0), (-1,-1), 'Helvetica'),
+        ('FONTSIZE', (0,0), (-1,-1), 9),
+        ('BOTTOMPADDING', (0,0), (-1,0), 8),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.lightgrey),
+    ]))
+    story.append(t)
+    story.append(Spacer(1, 15))
+    
+    summary_text = f"<b>ค่าขนส่งรวมสุทธิ:</b> {total_cost:,.2f} บาท | <b>เฉลี่ยต่อถัง:</b> {cost_per_tank:,.2f} บาท/ถัง"
+    story.append(Paragraph(summary_text, normal_style))
+
+    doc.build(story)
+    return buffer.getvalue()
 
 # โหลดประวัติ
 history_dict = load_history()
@@ -238,7 +290,15 @@ for i in range(int(num_trucks)):
     default_stop_fee = saved_truck.get("extra_stop_fee", 0.0)
     default_start_fee = saved_truck.get("start_fee_from_stop", 2)
     
-    type_options = ["รถกระบะ 4 ล้อ", "รถ 6 ล้อ", "รถ 10 ล้อ"]
+    # อัปเดตชนิดรถตามความต้องการใหม่
+    type_options = [
+        "รถกระบะ 4 ล้อ", 
+        "รถ 6 ล้อ", 
+        "รถ 10 ล้อ", 
+        "รถ 6 ล้อมีลิฟท์ท้าย", 
+        "รถ 10 ล้อมีลิฟท์ท้าย", 
+        "รถเทรลเลอร์"
+    ]
     type_index = type_options.index(default_truck_type) if default_truck_type in type_options else 0
     t_type = st.sidebar.selectbox(f"ประเภทรถ (คันที่ {i+1})", type_options, index=type_index, key=f"truck_type_{i}")
     
@@ -341,7 +401,45 @@ elif use_distance_cost == "อิงจากระยะทาง - เหม�
 else:
     distance_detail_str = f"ค่าระยะทางรวม ({distance_km:,.2f} กม. - คิดเหมา)"
 
-# 1.6 ค่าแรงเด็กยก
+# 1.6 ค่าเช่ารถโฟล์คลิฟท์ (Forklift) - เพิ่มเติมตามที่ขอ
+st.sidebar.subheader("🚜 ค่าเช่ารถโฟล์คลิฟท์ (Forklift)")
+use_forklift = st.sidebar.checkbox("ใช้บริการรถโฟล์คลิฟท์", value=bool(loaded_data.get("use_forklift", False)) if loaded_data else False)
+
+forklift_cost = 0.0
+forklift_driver_cost = 0.0
+forklift_type_mode = "รวมคนขับรถ"
+
+if use_forklift:
+    forklift_type_mode = st.sidebar.radio(
+        "รูปแบบการเช่ารถโฟล์คลิฟท์", 
+        ["รวมคนขับรถ", "แยกกับคนขับรถ"],
+        index=0 if loaded_data.get("forklift_type_mode", "รวมคนขับรถ") == "รวมคนขับรถ" else 1
+    )
+    
+    if forklift_type_mode == "รวมคนขับรถ":
+        forklift_cost = st.sidebar.number_input(
+            "ค่าเช่ารถโฟล์คลิฟท์รวมคนขับ (บาท)", 
+            min_value=0.0, 
+            value=float(loaded_data.get("forklift_cost", 0.0)) if loaded_data else 0.0, 
+            step=500.0, format="%.2f"
+        )
+    else:
+        forklift_cost = st.sidebar.number_input(
+            "ค่าเช่ารถโฟล์คลิฟท์ (บาท)", 
+            min_value=0.0, 
+            value=float(loaded_data.get("forklift_cost", 0.0)) if loaded_data else 0.0, 
+            step=500.0, format="%.2f"
+        )
+        forklift_driver_cost = st.sidebar.number_input(
+            "ค่าแรงคนขับรถโฟล์คลิฟท์ (บาท)", 
+            min_value=0.0, 
+            value=float(loaded_data.get("forklift_driver_cost", 0.0)) if loaded_data else 0.0, 
+            step=300.0, format="%.2f"
+        )
+
+total_forklift_cost = forklift_cost + forklift_driver_cost
+
+# 1.7 ค่าแรงเด็กยก
 st.sidebar.subheader("👷 รายละเอียดค่าแรงและสวัสดิการเด็กยก")
 num_laborers = st.sidebar.number_input("จำนวนเด็กยกทั้งหมด (คน)", min_value=0, value=int(loaded_data.get("num_laborers", 0) if loaded_data else 0), step=1)
 
@@ -356,11 +454,11 @@ else:
 cost_per_laborer = base_wage + early_morning_fee + diligence_allowance + sso_company_fee
 total_labor_cost = cost_per_laborer * num_laborers
 
-# 1.7 ค่ายกถัง
+# 1.8 ค่ายกถัง
 st.sidebar.subheader("📦 ค่ายกถังเพิ่มเติม")
 lifting_fee_per_tank = st.sidebar.number_input("ค่ายกต่อถัง (บาท)", min_value=0.0, value=float(loaded_data.get("lifting_fee_per_tank", 0.0) if loaded_data else 0.0), step=1.0, format="%.2f")
 
-# 1.8 ตัวเลือกการแสดงผล
+# 1.9 ตัวเลือกการแสดงผล
 st.sidebar.subheader("👁️ การแสดงผลตารางสรุปราคา")
 show_sub_items = st.sidebar.checkbox("แสดงรายการย่อยในตารางสรุปราคา", value=True)
 
@@ -376,10 +474,13 @@ if st.sidebar.button("💾 บันทึกข้อมูลนี้", use_c
             "destinations": [{"raw": d["raw"], "custom_name": d["custom_name"]} for d in destinations_data],
             "num_trucks": num_trucks, "trucks": trucks_save_state,
             "use_distance_cost": use_distance_cost, "base_free_km": base_free_km,
-            "cost_per_km": cost_per_km, "num_laborers": num_laborers,
-            "base_wage": base_wage, "early_morning_fee": early_morning_fee,
-            "diligence_allowance": diligence_allowance, "sso_company_fee": sso_company_fee,
-            "lifting_fee_per_tank": lifting_fee_per_tank, "num_tanks": num_tanks
+            "cost_per_km": cost_per_km, 
+            "use_forklift": use_forklift, "forklift_type_mode": forklift_type_mode,
+            "forklift_cost": forklift_cost, "forklift_driver_cost": forklift_driver_cost,
+            "num_laborers": num_laborers, "base_wage": base_wage, 
+            "early_morning_fee": early_morning_fee, "diligence_allowance": diligence_allowance, 
+            "sso_company_fee": sso_company_fee, "lifting_fee_per_tank": lifting_fee_per_tank, 
+            "num_tanks": num_tanks
         }
         save_history(history_dict)
         st.sidebar.success(f"บันทึกรายการ '{save_preset_name.strip()}' สำเร็จ!")
@@ -387,7 +488,10 @@ if st.sidebar.button("💾 บันทึกข้อมูลนี้", use_c
 
 # --- ส่วนที่ 2 & 3: คำนวณสรุปและแสดงผลตาราง ---
 total_lifting_fee = lifting_fee_per_tank * num_tanks
-total_shipping_cost = total_base_trip_cost + distance_cost + total_labor_cost + total_lifting_fee + total_extra_stop_fee
+total_shipping_cost = (
+    total_base_trip_cost + distance_cost + total_labor_cost + 
+    total_lifting_fee + total_extra_stop_fee + total_forklift_cost
+)
 cost_per_tank = total_shipping_cost / num_tanks if num_tanks > 0 else 0.0
 
 st.header("📊 1. ตารางราคาค่าขนส่งและรายละเอียด")
@@ -413,6 +517,16 @@ with col1:
         else:
             breakdown_items.append("  └─ ไม่มีค่าบริการเพิ่มจุดส่ง")
             breakdown_costs.append(0.0)
+
+    # เพิ่มเติมรายละเอียด รถโฟล์คลิฟท์
+    if use_forklift:
+        breakdown_items.append(f"ค่าเช่ารถโฟล์คลิฟท์ ({forklift_type_mode})")
+        breakdown_costs.append(total_forklift_cost)
+        if show_sub_items and forklift_type_mode == "แยกกับคนขับรถ":
+            breakdown_items.append(f"  └─ ค่าเช่าเครื่องโฟล์คลิฟท์: {forklift_cost:,.2f} ฿")
+            breakdown_costs.append(forklift_cost)
+            breakdown_items.append(f"  └─ ค่าแรงคนขับรถโฟล์คลิฟท์: {forklift_driver_cost:,.2f} ฿")
+            breakdown_costs.append(forklift_driver_cost)
 
     breakdown_items.append(labor_detail_str)
     breakdown_costs.append(total_labor_cost)
@@ -447,6 +561,40 @@ with col1:
         "ราคาต่อถัง (บาท/ถัง)": formatted_per_tank
     })
     st.dataframe(df_breakdown, use_container_width=True, hide_index=True)
+
+    # --- ส่วน Export ไฟล์ CSV / Excel / PDF ---
+    st.markdown("##### 📥 ส่งออกข้อมูล (Export Data)")
+    exp_col1, exp_col2, exp_col3 = st.columns(3)
+    
+    # 1. Export CSV
+    csv_data = df_breakdown.to_csv(index=False).encode('utf-8-sig')
+    exp_col1.download_button(
+        label="📄 ดาวน์โหลด CSV",
+        data=csv_data,
+        file_name="shipping_summary.csv",
+        mime="text/csv",
+        use_container_width=True
+    )
+
+    # 2. Export Excel
+    excel_data = convert_df_to_excel(df_breakdown)
+    exp_col2.download_button(
+        label="📊 ดาวน์โหลด Excel",
+        data=excel_data,
+        file_name="shipping_summary.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True
+    )
+
+    # 3. Export PDF
+    pdf_data = generate_pdf(df_breakdown, total_shipping_cost, cost_per_tank)
+    exp_col3.download_button(
+        label="📑 ดาวน์โหลด PDF",
+        data=pdf_data,
+        file_name="shipping_summary.pdf",
+        mime="application/pdf",
+        use_container_width=True
+    )
 
 with col2:
     st.metric(label="🎯 ค่าขนส่งรวมทั้งหมด", value=f"{total_shipping_cost:,.2f} บาท")
