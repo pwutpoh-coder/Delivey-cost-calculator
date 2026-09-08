@@ -1,19 +1,20 @@
 import streamlit as st
 
-# ป้องกัน Error ใน Python 3.14 ด้วย try-except
+# ตั้งค่าหน้าตาของแอป
 try:
     st.set_page_config(
-        page_title="ระบบคำนวณและจัดการค่าขนส่ง / ค่าเช่าโฟล์คลิฟท์",
+        page_title="ระบบคำนวณและจัดการค่าขนส่ง",
         page_layout="wide"
     )
-except st.errors.StreamlitAPIException:
+except Exception:
     pass
 
 import pandas as pd
 import json
 import io
 
-st.title("🚛 ระบบคำนวณและจัดการค่าขนส่ง / ค่าเช่ารถโฟล์คลิฟท์")
+# เปลี่ยนชื่อแอปแล้วตามที่ขอครับ
+st.title("🚛 ระบบคำนวณและจัดการค่าขนส่ง")
 st.markdown("---")
 
 # Initialize Session State
