@@ -27,7 +27,8 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🚚 แพลตฟอร์มคำนวณค่าขนส่งและวางแผนเส้นทาง")
+# ปรับขนาดหัวข้อหลักให้เล็กลงมานิดเดียว (ใช้ h2 แทน title)
+st.markdown("<h2 style='margin-bottom: 1rem;'>🚚 แพลตฟอร์มคำนวณค่าขนส่งและวางแผนเส้นทาง</h2>", unsafe_allow_html=True)
 
 # Initialize geolocator
 geolocator = ArcGIS(timeout=10)
@@ -253,7 +254,6 @@ saved_trucks_list = loaded_data.get("trucks", []) if loaded_data else []
 truck_details, trucks_save_state, truck_routes_info, truck_stop_fees_breakdown = [], [], [], []
 total_base_trip_cost, total_extra_stop_fee, auto_total_distance_km = 0.0, 0.0, 0.0
 
-# อัปเดตชนิดรถตามต้องการ
 type_options = [
     "รถกระบะ 4 ล้อ", 
     "รถ 6 ล้อ", 
@@ -395,7 +395,7 @@ total_labor_cost = cost_per_laborer * num_laborers
 st.sidebar.subheader("📦 ค่ายกถังเพิ่มเติม")
 lifting_fee_per_tank = st.sidebar.number_input("ค่ายกต่อถัง (บาท)", min_value=0.0, value=float(loaded_data.get("lifting_fee_per_tank", 0.0) if loaded_data else 0.0), step=1.0, format="%.2f")
 
-# 1.8 ค่าเช่ารถโฟล์คลิฟท์ (ส่วนที่เพิ่มใหม่)
+# 1.8 ค่าเช่ารถโฟล์คลิฟท์
 st.sidebar.subheader("🚜 ค่าเช่ารถโฟล์คลิฟท์ (Forklift)")
 use_forklift = st.sidebar.checkbox("มีการใช้/เช่ารถโฟล์คลิฟท์", value=bool(loaded_data.get("use_forklift", False)) if loaded_data else False)
 
@@ -449,7 +449,6 @@ if st.sidebar.button("💾 บันทึกข้อมูลนี้", use_c
             "base_wage": base_wage, "early_morning_fee": early_morning_fee,
             "diligence_allowance": diligence_allowance, "sso_company_fee": sso_company_fee,
             "lifting_fee_per_tank": lifting_fee_per_tank, "num_tanks": num_tanks,
-            # บันทึกส่วนของโฟล์คลิฟท์เพิ่มเติม
             "use_forklift": use_forklift, "forklift_mode": forklift_mode,
             "num_forklifts": num_forklifts, "forklift_days": forklift_days,
             "forklift_rate_per_day": forklift_rate_per_day,
@@ -509,7 +508,6 @@ with col1:
     breakdown_items.append(f"ค่ายกถัง ({num_tanks} ถัง x {lifting_fee_per_tank:,.2f} ฿)")
     breakdown_costs.append(total_lifting_fee)
 
-    # แสดงผลรายการค่าเช่าโฟล์คลิฟท์
     if use_forklift:
         if forklift_mode == "ค่าเช่ารวมคนขับ":
             forklift_str = f"ค่าเช่ารถโฟล์คลิฟท์รวมคนขับ ({num_forklifts} คัน x {forklift_days} วัน @ {forklift_rate_per_day:,.2f} ฿/วัน)"
