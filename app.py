@@ -112,7 +112,6 @@ def parse_and_resolve_location(text_input):
         pass
     return None, text
 
-# เพิ่ม Cache สำหรับ OSRM เพื่อป้องกันการยิง API ซ้ำและทำให้ UI ตอบสนองไวขึ้น
 @st.cache_data(ttl=3600)
 def get_multi_stop_route(coords_list):
     if len(coords_list) < 2:
@@ -138,7 +137,13 @@ def get_multi_stop_route(coords_list):
 history_dict = load_history()
 
 # --- Sidebar Management ---
-st.sidebar.header("📁 จัดการและบันทึกประวัติ")
+st.sidebar.header("📁 จัดการประวัติและรีเซ็ตระบบ")
+
+col_reset, col_backup = st.sidebar.columns(2)
+if col_reset.button("🔄 รีเซ็ตค่าใหม่ทั้งหมด", use_container_width=True):
+    st.session_state["selected_preset_key"] = "-- เลือกรายการเพื่อโหลด --"
+    st.session_state.clear()
+    st.rerun()
 
 options_list = ["-- เลือกรายการเพื่อโหลด --"] + list(history_dict.keys())
 selected_preset_name = st.sidebar.selectbox(
@@ -195,31 +200,51 @@ st.sidebar.header("⚙️ กำหนดค่าและปัจจัยก
 default_num_tanks = loaded_data.get("num_tanks", 0) if loaded_data else 0
 num_tanks = st.sidebar.number_input("จำนวนถังที่ส่งทั้งหมด (ถัง)", min_value=0, value=int(default_num_tanks), step=10)
 
-# 1.2 จุดต้นทาง
-st.sidebar.subheader("📍 จุดต้นทาง (คลัง/ศูนย์กระจายสินค้า)")
-default_raw_origin = loaded_data.get("raw_origin", "") if loaded_data else ""
-default_origin_custom_name = loaded_data.get("origin_custom_name", "") if loaded_data else ""
+# 1.2 จุดต้นทาง (รองรับหลายจุดต้นทาง)
+st.sidebar.subheader("🏬 จุดต้นทาง (คลัง / ศูนย์กระจายสินค้า)")
 
-raw_origin = st.sidebar.text_input("พิกัด/ชื่อสถานที่ต้นทาง", default_raw_origin, placeholder="เช่น 13.7563, 100.5018 หรือ กรุงเทพ")
-loc_origin, resolved_origin_name = parse_and_resolve_location(raw_origin)
-origin_custom_name = st.sidebar.text_input("ตั้งชื่อจุดต้นทาง (ถ้าต้องการเปลี่ยน)", default_origin_custom_name, placeholder="เช่น คลังสินค้าหลัก บางนา")
+saved_origins_list = loaded_data.get("origins", []) if loaded_data else []
+default_num_origins = len(saved_origins_list) if saved_origins_list else 1
+num_origins = st.sidebar.number_input("จำนวนจุดต้นทาง/คลังทั้งหมด", min_value=1, value=int(default_num_origins), step=1)
 
-origin_display = origin_custom_name.strip() or resolved_origin_name or "จุดต้นทาง"
+origins_data = []
+for idx in range(int(num_origins)):
+    o_num = idx + 1
+    def_raw, def_custom = "", ""
+    if idx < len(saved_origins_list):
+        def_raw = saved_origins_list[idx].get("raw", "")
+        def_custom = saved_origins_list[idx].get("custom_name", "")
+    
+    st.sidebar.markdown(f"**🏢 ต้นทาง/คลังที่ {o_num}**")
+    raw_ori = st.sidebar.text_input(f"พิกัด/สถานที่ คลัง #{o_num}", def_raw, key=f"origin_raw_{idx}", placeholder="เช่น 13.7563, 100.5018 หรือ บางนา")
+    loc_ori, res_ori_name = parse_and_resolve_location(raw_ori)
+    cust_ori = st.sidebar.text_input(f"ตั้งชื่อคลัง #{o_num}", def_custom, key=f"origin_cust_{idx}", placeholder=f"เช่น คลังสินค้า {o_num}")
+    
+    final_ori_display = cust_ori.strip() or res_ori_name or f"คลังที่ {o_num}"
+    
+    if raw_ori and loc_ori:
+        st.sidebar.caption(f"📍 พิกัด: **{res_ori_name}**")
+    elif raw_ori:
+        st.sidebar.warning(f"⚠️ ไม่พบพิกัด คลังที่ {o_num}")
 
-if raw_origin:
-    if loc_origin:
-        st.sidebar.caption(f"📍 พิกัดระบบพบ: **{resolved_origin_name}**")
-    else:
-        st.sidebar.warning("⚠️ ไม่พบพิกัดจุดต้นทาง โปรดตรวจสอบชื่อหรือพิกัดที่ระบุ")
+    origins_data.append({
+        "index": o_num,
+        "raw": raw_ori,
+        "custom_name": cust_ori,
+        "coord": loc_ori,
+        "resolved_name": res_ori_name,
+        "display": final_ori_display
+    })
+
+origin_map = {f"คลังที่ {o['index']}: {o['display']}": o for o in origins_data}
 
 # 1.3 จุดจัดส่งปลายทาง
 st.sidebar.subheader("📍 จุดจัดส่งปลายทาง")
-default_num_dest = loaded_data.get("num_destinations", 1) if loaded_data else 1
+saved_dest_list = loaded_data.get("destinations", []) if loaded_data else []
+default_num_dest = len(saved_dest_list) if saved_dest_list else 1
 num_destinations = st.sidebar.number_input("จำนวนจุดจัดส่งปลายทางทั้งหมด (จุด)", min_value=1, value=int(default_num_dest), step=1)
 
 destinations_data = []
-saved_dest_list = loaded_data.get("destinations", []) if loaded_data else []
-
 for j in range(int(num_destinations)):
     stop_num = j + 1
     default_raw, default_custom_name = "", ""
@@ -233,15 +258,14 @@ for j in range(int(num_destinations)):
     st.sidebar.markdown(f"**📌 จุดส่งที่ {stop_num}**")
     raw_dest = st.sidebar.text_input(f"ค้นหาด้วย พิกัด / ชื่อสถานที่ #{stop_num}", default_raw, key=f"dest_input_{j}", placeholder="เช่น 14.35, 100.57 หรือ อยุธยา")
     loc_dest, resolved_dest_name = parse_and_resolve_location(raw_dest)
-    custom_name = st.sidebar.text_input(f"ตั้งชื่อจุดส่งที่ {stop_num} (ถ้าต้องการเปลี่ยน)", default_custom_name, key=f"dest_name_{j}", placeholder="เช่น สาขาอยุธยา หรือ คลัง B")
+    custom_name = st.sidebar.text_input(f"ตั้งชื่อจุดส่งที่ {stop_num}", default_custom_name, key=f"dest_name_{j}", placeholder="เช่น สาขาอยุธยา หรือ คลัง B")
 
     final_display_name = custom_name.strip() or resolved_dest_name or f"จุดส่งที่ {stop_num}"
 
-    if raw_dest:
-        if loc_dest:
-            st.sidebar.caption(f"📍 แปลงพิกัดเป็น: **{resolved_dest_name}**")
-        else:
-            st.sidebar.warning(f"⚠️ ไม่พบพิกัดจุดส่งที่ {stop_num}")
+    if raw_dest and loc_dest:
+        st.sidebar.caption(f"📍 พิกัด: **{resolved_dest_name}**")
+    elif raw_dest:
+        st.sidebar.warning(f"⚠️ ไม่พบพิกัดจุดส่งที่ {stop_num}")
     
     destinations_data.append({
         "index": stop_num,
@@ -256,10 +280,10 @@ dest_map = {f"จุดส่งที่ {d['index']}: {d['display']}": d for d
 
 # 1.4 รถและการมอบหมายจุดส่ง
 st.sidebar.subheader("🚚 เงื่อนไขการขนส่งและตั้งค่าต่อคัน")
-default_num_trucks = loaded_data.get("num_trucks", 1) if loaded_data else 1
+saved_trucks_list = loaded_data.get("trucks", []) if loaded_data else []
+default_num_trucks = len(saved_trucks_list) if saved_trucks_list else 1
 num_trucks = st.sidebar.number_input("จำนวนรถที่ใช้ (คัน)", min_value=1, value=int(default_num_trucks), step=1)
 
-saved_trucks_list = loaded_data.get("trucks", []) if loaded_data else []
 truck_details, trucks_save_state, truck_routes_info, truck_stop_fees_breakdown = [], [], [], []
 total_base_trip_cost, total_extra_stop_fee, auto_total_distance_km = 0.0, 0.0, 0.0
 
@@ -282,7 +306,15 @@ for i in range(int(num_trucks)):
     default_rate = saved_truck.get("rate", 0.0)
     default_stop_fee = saved_truck.get("extra_stop_fee", 0.0)
     default_start_fee = saved_truck.get("start_fee_from_stop", 2)
-    
+    default_assigned_origin = saved_truck.get("origin_key", list(origin_map.keys())[0] if origin_map else "")
+    default_assigned_stops = saved_truck.get("stops_keys", list(dest_map.keys()) if num_trucks == 1 else [])
+
+    # เลือกระบุจุดต้นทางของคันนี้
+    ori_options = list(origin_map.keys())
+    ori_index = ori_options.index(default_assigned_origin) if default_assigned_origin in ori_options else 0
+    t_assigned_origin_key = st.sidebar.selectbox(f"จุดต้นทาง (คันที่ {i+1})", ori_options, index=ori_index, key=f"truck_origin_{i}")
+    selected_origin_obj = origin_map.get(t_assigned_origin_key)
+
     type_index = type_options.index(default_truck_type) if default_truck_type in type_options else 0
     t_type = st.sidebar.selectbox(f"ประเภทรถ (คันที่ {i+1})", type_options, index=type_index, key=f"truck_type_{i}")
     
@@ -298,15 +330,20 @@ for i in range(int(num_trucks)):
         t_cost = t_rate * num_tanks
 
     dest_options = list(dest_map.keys())
+    valid_default_stops = [s for s in default_assigned_stops if s in dest_options]
+    
     assigned_stops = st.sidebar.multiselect(
         f"จุดส่งที่รถคันที่ {i+1} วิ่งส่ง",
         options=dest_options,
-        default=dest_options if num_trucks == 1 else [],
+        default=valid_default_stops,
         key=f"truck_stops_{i}"
     )
     
     stops_count = len(assigned_stops)
-    truck_coords = [loc_origin] if loc_origin else []
+    truck_coords = []
+    if selected_origin_obj and selected_origin_obj["coord"]:
+        truck_coords.append(selected_origin_obj["coord"])
+
     for stop_label in assigned_stops:
         target_dest = dest_map.get(stop_label)
         if target_dest and target_dest["coord"]:
@@ -318,6 +355,7 @@ for i in range(int(num_trucks)):
     truck_routes_info.append({
         "truck_index": i + 1,
         "truck_type": t_type,
+        "origin_obj": selected_origin_obj,
         "assigned_stops": [dest_map[s] for s in assigned_stops if s in dest_map],
         "coords": truck_coords,
         "distance_km": t_dist_km,
@@ -348,14 +386,20 @@ for i in range(int(num_trucks)):
             "cost": truck_total_stop_fee
         })
 
+    ori_name_tag = selected_origin_obj['display'] if selected_origin_obj else 'ไม่ระบุ'
     if t_calc_mode == "เหมาจ่ายต่อเที่ยว":
-        truck_details.append(f"{t_type} ({t_cost:,.2f} ฿ [เหมา] - วิ่ง {stops_count} จุด / {t_dist_km:,.2f} กม.)")
+        truck_details.append(f"{t_type} [จาก: {ori_name_tag}] ({t_cost:,.2f} ฿ - วิ่ง {stops_count} จุด / {t_dist_km:,.2f} กม.)")
     else:
-        truck_details.append(f"{t_type} ({t_rate:,.2f} ฿/ถัง x {num_tanks} ถัง = {t_cost:,.2f} ฿ - วิ่ง {stops_count} จุด / {t_dist_km:,.2f} กม.)")
+        truck_details.append(f"{t_type} [จาก: {ori_name_tag}] ({t_rate:,.2f} ฿/ถัง x {num_tanks} ถัง = {t_cost:,.2f} ฿ - วิ่ง {stops_count} จุด / {t_dist_km:,.2f} กม.)")
 
     trucks_save_state.append({
-        "type": t_type, "calc_mode": t_calc_mode, "rate": float(t_rate),
-        "extra_stop_fee": float(t_extra_stop_fee), "start_fee_from_stop": int(t_start_fee_from)
+        "type": t_type, 
+        "calc_mode": t_calc_mode, 
+        "rate": float(t_rate),
+        "extra_stop_fee": float(t_extra_stop_fee), 
+        "start_fee_from_stop": int(t_start_fee_from),
+        "origin_key": t_assigned_origin_key,
+        "stops_keys": assigned_stops
     })
     total_base_trip_cost += float(t_cost)
 
@@ -449,17 +493,23 @@ save_preset_name = st.sidebar.text_input("ตั้งชื่อรายก�
 if st.sidebar.button("💾 บันทึกข้อมูลนี้", use_container_width=True):
     if save_preset_name.strip():
         history_dict[save_preset_name.strip()] = {
-            "raw_origin": raw_origin, "origin_custom_name": origin_custom_name,
-            "num_destinations": num_destinations,
+            "num_tanks": num_tanks,
+            "origins": [{"raw": o["raw"], "custom_name": o["custom_name"]} for o in origins_data],
             "destinations": [{"raw": d["raw"], "custom_name": d["custom_name"]} for d in destinations_data],
-            "num_trucks": num_trucks, "trucks": trucks_save_state,
-            "use_distance_cost": use_distance_cost, "base_free_km": base_free_km,
-            "cost_per_km": cost_per_km, "num_laborers": num_laborers,
-            "base_wage": base_wage, "early_morning_fee": early_morning_fee,
-            "diligence_allowance": diligence_allowance, "sso_company_fee": sso_company_fee,
-            "lifting_fee_per_tank": lifting_fee_per_tank, "num_tanks": num_tanks,
-            "use_forklift": use_forklift, "forklift_mode": forklift_mode,
-            "num_forklifts": num_forklifts, "forklift_days": forklift_days,
+            "trucks": trucks_save_state,
+            "use_distance_cost": use_distance_cost, 
+            "base_free_km": base_free_km,
+            "cost_per_km": cost_per_km, 
+            "num_laborers": num_laborers,
+            "base_wage": base_wage, 
+            "early_morning_fee": early_morning_fee,
+            "diligence_allowance": diligence_allowance, 
+            "sso_company_fee": sso_company_fee,
+            "lifting_fee_per_tank": lifting_fee_per_tank, 
+            "use_forklift": use_forklift, 
+            "forklift_mode": forklift_mode,
+            "num_forklifts": num_forklifts, 
+            "forklift_days": forklift_days,
             "forklift_rate_per_day": forklift_rate_per_day,
             "forklift_driver_wage_per_day": forklift_driver_wage_per_day
         }
@@ -480,12 +530,13 @@ col1, col2 = st.columns([2, 1])
 
 trucks_summary_str = f"ค่าขนส่งพื้นฐานรวม ({num_trucks} คัน: {', '.join(truck_details)})"
 labor_detail_str = f"ค่าแรงและสวัสดิการเด็กยก ({num_laborers} คน @ คนละ {cost_per_laborer:,.2f} ฿)"
+origins_summary_list = [f"คลัง {o['index']}: {o['display']}" for o in origins_data]
 dest_summary_list = [f"จุด {d['index']}: {d['display']}" for d in destinations_data]
-route_summary_str = f"{origin_display} ➔ " + " ➔ ".join(dest_summary_list)
+route_summary_str = f"[{', '.join(origins_summary_list)}] ➔ " + " ➔ ".join(dest_summary_list)
 
 with col1:
     breakdown_items = [
-        f"เส้นทางจัดส่ง ({len(destinations_data)} จุดส่ง): {route_summary_str}",
+        f"เส้นทางจัดส่ง ({len(origins_data)} คลัง ➔ {len(destinations_data)} จุดส่ง): {route_summary_str}",
         trucks_summary_str, distance_detail_str, "ค่าบริการจุดส่งเพิ่มรวมจากรถทุกคัน"
     ]
     breakdown_costs = ["-", total_base_trip_cost, distance_cost, total_extra_stop_fee]
@@ -570,7 +621,7 @@ st.markdown("---")
 # --- ส่วนที่ 4: แสดงผลแผนที่ ---
 st.markdown("<h3 style='margin-bottom: 0.8rem;'>🗺️ 2. แผนที่แสดงจุดจัดส่งและเส้นทางถนนจริง (แยกสีตามคันรถ)</h3>", unsafe_allow_html=True)
 
-all_valid_coords = [loc_origin] if loc_origin else []
+all_valid_coords = [o["coord"] for o in origins_data if o["coord"]]
 all_valid_coords.extend([d["coord"] for d in destinations_data if d["coord"]])
 
 if len(all_valid_coords) >= 1:
@@ -582,14 +633,17 @@ else:
 
 m = folium.Map(location=[avg_lat, avg_lon], zoom_start=zoom_level)
 
-if loc_origin:
-    folium.Marker(
-        loc_origin, 
-        popup=f"ต้นทาง: {origin_display}", 
-        tooltip=f"ต้นทาง: {origin_display}", 
-        icon=folium.Icon(color="black", icon="play", prefix="fa")
-    ).add_to(m)
+# วาด Marker คลัง/จุดต้นทางทั้งหมด
+for o in origins_data:
+    if o["coord"]:
+        folium.Marker(
+            o["coord"], 
+            popup=f"คลังที่ {o['index']}: {o['display']}", 
+            tooltip=f"🏢 ต้นทาง/คลังที่ {o['index']}: {o['display']}", 
+            icon=folium.Icon(color="black", icon="play", prefix="fa")
+        ).add_to(m)
 
+# วาดเส้นทางและหมุดสำหรับแต่ละคัน
 for t_info in truck_routes_info:
     t_idx = t_info["truck_index"]
     t_type = t_info["truck_type"]
@@ -620,6 +674,7 @@ for t_info in truck_routes_info:
 
 assigned_dest_indices = {s["index"] for t_info in truck_routes_info for s in t_info["assigned_stops"]}
 
+# แสดงจุดส่งที่ยังไม่ได้มอบหมายรถ
 for d in destinations_data:
     if d["index"] not in assigned_dest_indices and d["coord"]:
         folium.Marker(
