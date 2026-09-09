@@ -27,7 +27,6 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# ปรับขนาดหัวข้อหลัก
 st.markdown("<h2 style='margin-bottom: 1rem;'>🚚 แพลตฟอร์มคำนวณค่าขนส่งและวางแผนเส้นทาง</h2>", unsafe_allow_html=True)
 
 # Initialize geolocator
@@ -113,6 +112,8 @@ def parse_and_resolve_location(text_input):
         pass
     return None, text
 
+# เพิ่ม Cache สำหรับ OSRM เพื่อป้องกันการยิง API ซ้ำและทำให้ UI ตอบสนองไวขึ้น
+@st.cache_data(ttl=3600)
 def get_multi_stop_route(coords_list):
     if len(coords_list) < 2:
         return 0.0, []
@@ -139,20 +140,24 @@ history_dict = load_history()
 # --- Sidebar Management ---
 st.sidebar.header("📁 จัดการและบันทึกประวัติ")
 
+options_list = ["-- เลือกรายการเพื่อโหลด --"] + list(history_dict.keys())
 selected_preset_name = st.sidebar.selectbox(
     "📂 เลือกรายการที่เคยบันทึกไว้", 
-    options=["-- เลือกรายการเพื่อโหลด --"] + list(history_dict.keys())
+    options=options_list,
+    key="selected_preset_key"
 )
 
 loaded_data = None
 if selected_preset_name != "-- เลือกรายการเพื่อโหลด --":
     loaded_data = history_dict.get(selected_preset_name)
-    st.sidebar.success(f"โหลดข้อมูล '{selected_preset_name}' เรียบร้อยแล้ว")
+    if loaded_data:
+        st.sidebar.success(f"โหลดข้อมูล '{selected_preset_name}' เรียบร้อยแล้ว")
 
 col_save, col_del = st.sidebar.columns(2)
 if loaded_data and col_del.button("🗑️ ลบรายการนี้", use_container_width=True):
     del history_dict[selected_preset_name]
     save_history(history_dict)
+    st.session_state["selected_preset_key"] = "-- เลือกรายการเพื่อโหลด --"
     st.sidebar.warning(f"ลบรายการ '{selected_preset_name}' แล้ว")
     st.rerun()
 
@@ -201,8 +206,11 @@ origin_custom_name = st.sidebar.text_input("ตั้งชื่อจุดต
 
 origin_display = origin_custom_name.strip() or resolved_origin_name or "จุดต้นทาง"
 
-if raw_origin and loc_origin:
-    st.sidebar.caption(f"📍 พิกัดระบบพบ: **{resolved_origin_name}**")
+if raw_origin:
+    if loc_origin:
+        st.sidebar.caption(f"📍 พิกัดระบบพบ: **{resolved_origin_name}**")
+    else:
+        st.sidebar.warning("⚠️ ไม่พบพิกัดจุดต้นทาง โปรดตรวจสอบชื่อหรือพิกัดที่ระบุ")
 
 # 1.3 จุดจัดส่งปลายทาง
 st.sidebar.subheader("📍 จุดจัดส่งปลายทาง")
@@ -229,8 +237,11 @@ for j in range(int(num_destinations)):
 
     final_display_name = custom_name.strip() or resolved_dest_name or f"จุดส่งที่ {stop_num}"
 
-    if raw_dest and loc_dest:
-        st.sidebar.caption(f"📍 แปลงพิกัดเป็น: **{resolved_dest_name}**")
+    if raw_dest:
+        if loc_dest:
+            st.sidebar.caption(f"📍 แปลงพิกัดเป็น: **{resolved_dest_name}**")
+        else:
+            st.sidebar.warning(f"⚠️ ไม่พบพิกัดจุดส่งที่ {stop_num}")
     
     destinations_data.append({
         "index": stop_num,
@@ -464,7 +475,6 @@ total_shipping_cost = (
 )
 cost_per_tank = total_shipping_cost / num_tanks if num_tanks > 0 else 0.0
 
-# ปรับขนาดหัวข้อส่วนที่ 1 ให้เล็กลงมานิดเดียว (ใช้ h3 แทน header)
 st.markdown("<h3 style='margin-bottom: 0.8rem;'>📊 1. ตารางราคาค่าขนส่งและรายละเอียด</h3>", unsafe_allow_html=True)
 col1, col2 = st.columns([2, 1])
 
@@ -558,7 +568,6 @@ with col2:
 st.markdown("---")
 
 # --- ส่วนที่ 4: แสดงผลแผนที่ ---
-# ปรับขนาดหัวข้อส่วนที่ 2 ให้เล็กลงมานิดเดียว (ใช้ h3 แทน header)
 st.markdown("<h3 style='margin-bottom: 0.8rem;'>🗺️ 2. แผนที่แสดงจุดจัดส่งและเส้นทางถนนจริง (แยกสีตามคันรถ)</h3>", unsafe_allow_html=True)
 
 all_valid_coords = [loc_origin] if loc_origin else []
