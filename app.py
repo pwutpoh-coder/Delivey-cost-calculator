@@ -91,7 +91,7 @@ def reverse_geocode(lat, lon):
 def parse_and_resolve_location(text_input):
     if not text_input:
         return None, ""
-    text = text_input.strip()
+    text = str(text_input).strip()
     if not text:
         return None, ""
     
@@ -141,30 +141,85 @@ st.sidebar.header("📁 จัดการประวัติและรี�
 
 col_reset, col_backup = st.sidebar.columns(2)
 if col_reset.button("🔄 รีเซ็ตค่าใหม่ทั้งหมด", use_container_width=True):
-    st.session_state["selected_preset_key"] = "-- เลือกรายการเพื่อโหลด --"
     st.session_state.clear()
+    st.session_state["selected_preset_key"] = "-- เลือกรายการเพื่อโหลด --"
     st.rerun()
 
 options_list = ["-- เลือกรายการเพื่อโหลด --"] + list(history_dict.keys())
+
+# ฟังก์ชั่นอัปเดต Session State ทั้งหมดเมื่อกดเลือกรายการ
+def apply_preset_to_session_state(preset_name):
+    data = history_dict.get(preset_name)
+    if not data:
+        return
+    
+    st.session_state["num_tanks"] = int(data.get("num_tanks", 0))
+    
+    # ดึงข้อมูลจุดต้นทาง
+    origins = data.get("origins", [])
+    st.session_state["num_origins"] = len(origins) if origins else 1
+    for idx, o in enumerate(origins):
+        st.session_state[f"origin_raw_{idx}"] = o.get("raw", "")
+        st.session_state[f"origin_cust_{idx}"] = o.get("custom_name", "")
+
+    # ดึงข้อมูลจุดจัดส่ง
+    dests = data.get("destinations", [])
+    st.session_state["num_destinations"] = len(dests) if dests else 1
+    for j, d in enumerate(dests):
+        if isinstance(d, dict):
+            st.session_state[f"dest_input_{j}"] = d.get("raw", "")
+            st.session_state[f"dest_name_{j}"] = d.get("custom_name", "")
+        else:
+            st.session_state[f"dest_input_{j}"] = str(d)
+            st.session_state[f"dest_name_{j}"] = ""
+
+    # ดึงข้อมูลรถ
+    trucks = data.get("trucks", [])
+    st.session_state["num_trucks"] = len(trucks) if trucks else 1
+    for i, t in enumerate(trucks):
+        st.session_state[f"truck_origin_{i}"] = t.get("origin_key", "")
+        st.session_state[f"truck_type_{i}"] = t.get("type", "รถกระบะ 4 ล้อ")
+        st.session_state[f"truck_mode_{i}"] = t.get("calc_mode", "เหมาจ่ายต่อเที่ยว")
+        st.session_state[f"truck_rate_{i}"] = float(t.get("rate", 0.0))
+        st.session_state[f"truck_stops_{i}"] = t.get("stops_keys", [])
+        st.session_state[f"truck_start_fee_{i}"] = int(t.get("start_fee_from_stop", 2))
+        st.session_state[f"truck_stop_fee_{i}"] = float(t.get("extra_stop_fee", 0.0))
+
+    # ดึงข้อมูลเงื่อนไขต่างๆ
+    st.session_state["use_distance_cost"] = data.get("use_distance_cost", "ไม่อิงจากระยะทาง (คิดเหมา)")
+    st.session_state["cost_per_km"] = float(data.get("cost_per_km", 0.0))
+    st.session_state["base_free_km"] = float(data.get("base_free_km", 0.0))
+    
+    st.session_state["num_laborers"] = int(data.get("num_laborers", 0))
+    st.session_state["base_wage"] = float(data.get("base_wage", 0.0))
+    st.session_state["early_morning_fee"] = float(data.get("early_morning_fee", 0.0))
+    st.session_state["diligence_allowance"] = float(data.get("diligence_allowance", 0.0))
+    st.session_state["sso_company_fee"] = float(data.get("sso_company_fee", 0.0))
+    
+    st.session_state["lifting_fee_per_tank"] = float(data.get("lifting_fee_per_tank", 0.0))
+    
+    st.session_state["use_forklift"] = bool(data.get("use_forklift", False))
+    st.session_state["forklift_mode"] = data.get("forklift_mode", "ค่าเช่ารวมคนขับ")
+    st.session_state["num_forklifts"] = int(data.get("num_forklifts", 1))
+    st.session_state["forklift_days"] = int(data.get("forklift_days", 1))
+    st.session_state["forklift_rate_per_day"] = float(data.get("forklift_rate_per_day", 0.0))
+    st.session_state["forklift_driver_wage_per_day"] = float(data.get("forklift_driver_wage_per_day", 0.0))
+
 selected_preset_name = st.sidebar.selectbox(
     "📂 เลือกรายการที่เคยบันทึกไว้", 
     options=options_list,
-    key="selected_preset_key"
+    key="selected_preset_key",
+    on_change=lambda: apply_preset_to_session_state(st.session_state.selected_preset_key)
 )
 
-loaded_data = None
-if selected_preset_name != "-- เลือกรายการเพื่อโหลด --":
-    loaded_data = history_dict.get(selected_preset_name)
-    if loaded_data:
-        st.sidebar.success(f"โหลดข้อมูล '{selected_preset_name}' เรียบร้อยแล้ว")
-
 col_save, col_del = st.sidebar.columns(2)
-if loaded_data and col_del.button("🗑️ ลบรายการนี้", use_container_width=True):
-    del history_dict[selected_preset_name]
-    save_history(history_dict)
-    st.session_state["selected_preset_key"] = "-- เลือกรายการเพื่อโหลด --"
-    st.sidebar.warning(f"ลบรายการ '{selected_preset_name}' แล้ว")
-    st.rerun()
+if selected_preset_name != "-- เลือกรายการเพื่อโหลด --" and col_del.button("🗑️ ลบรายการนี้", use_container_width=True):
+    if selected_preset_name in history_dict:
+        del history_dict[selected_preset_name]
+        save_history(history_dict)
+        st.session_state["selected_preset_key"] = "-- เลือกรายการเพื่อโหลด --"
+        st.sidebar.warning(f"ลบรายการ '{selected_preset_name}' แล้ว")
+        st.rerun()
 
 # สำรอง/นำเข้าไฟล์ประวัติ JSON
 with st.sidebar.expander("📥 Export / Import สำรองไฟล์ประวัติ"):
@@ -197,28 +252,20 @@ st.sidebar.markdown("---")
 st.sidebar.header("⚙️ กำหนดค่าและปัจจัยการคำนวณ")
 
 # 1.1 จำนวนถัง
-default_num_tanks = loaded_data.get("num_tanks", 0) if loaded_data else 0
-num_tanks = st.sidebar.number_input("จำนวนถังที่ส่งทั้งหมด (ถัง)", min_value=0, value=int(default_num_tanks), step=10)
+num_tanks = st.sidebar.number_input("จำนวนถังที่ส่งทั้งหมด (ถัง)", min_value=0, step=10, key="num_tanks")
 
 # 1.2 จุดต้นทาง (รองรับหลายจุดต้นทาง)
 st.sidebar.subheader("🏬 จุดต้นทาง (คลัง / ศูนย์กระจายสินค้า)")
 
-saved_origins_list = loaded_data.get("origins", []) if loaded_data else []
-default_num_origins = len(saved_origins_list) if saved_origins_list else 1
-num_origins = st.sidebar.number_input("จำนวนจุดต้นทาง/คลังทั้งหมด", min_value=1, value=int(default_num_origins), step=1)
+num_origins = st.sidebar.number_input("จำนวนจุดต้นทาง/คลังทั้งหมด", min_value=1, step=1, key="num_origins")
 
 origins_data = []
 for idx in range(int(num_origins)):
     o_num = idx + 1
-    def_raw, def_custom = "", ""
-    if idx < len(saved_origins_list):
-        def_raw = saved_origins_list[idx].get("raw", "")
-        def_custom = saved_origins_list[idx].get("custom_name", "")
-    
     st.sidebar.markdown(f"**🏢 ต้นทาง/คลังที่ {o_num}**")
-    raw_ori = st.sidebar.text_input(f"พิกัด/สถานที่ คลัง #{o_num}", def_raw, key=f"origin_raw_{idx}", placeholder="เช่น 13.7563, 100.5018 หรือ บางนา")
+    raw_ori = st.sidebar.text_input(f"พิกัด/สถานที่ คลัง #{o_num}", key=f"origin_raw_{idx}", placeholder="เช่น 13.7563, 100.5018 หรือ บางนา")
     loc_ori, res_ori_name = parse_and_resolve_location(raw_ori)
-    cust_ori = st.sidebar.text_input(f"ตั้งชื่อคลัง #{o_num}", def_custom, key=f"origin_cust_{idx}", placeholder=f"เช่น คลังสินค้า {o_num}")
+    cust_ori = st.sidebar.text_input(f"ตั้งชื่อคลัง #{o_num}", key=f"origin_cust_{idx}", placeholder=f"เช่น คลังสินค้า {o_num}")
     
     final_ori_display = cust_ori.strip() or res_ori_name or f"คลังที่ {o_num}"
     
@@ -240,25 +287,15 @@ origin_map = {f"คลังที่ {o['index']}: {o['display']}": o for o in 
 
 # 1.3 จุดจัดส่งปลายทาง
 st.sidebar.subheader("📍 จุดจัดส่งปลายทาง")
-saved_dest_list = loaded_data.get("destinations", []) if loaded_data else []
-default_num_dest = len(saved_dest_list) if saved_dest_list else 1
-num_destinations = st.sidebar.number_input("จำนวนจุดจัดส่งปลายทางทั้งหมด (จุด)", min_value=1, value=int(default_num_dest), step=1)
+num_destinations = st.sidebar.number_input("จำนวนจุดจัดส่งปลายทางทั้งหมด (จุด)", min_value=1, step=1, key="num_destinations")
 
 destinations_data = []
 for j in range(int(num_destinations)):
     stop_num = j + 1
-    default_raw, default_custom_name = "", ""
-    if j < len(saved_dest_list):
-        if isinstance(saved_dest_list[j], dict):
-            default_raw = saved_dest_list[j].get("raw", "")
-            default_custom_name = saved_dest_list[j].get("custom_name", "")
-        else:
-            default_raw = saved_dest_list[j]
-
     st.sidebar.markdown(f"**📌 จุดส่งที่ {stop_num}**")
-    raw_dest = st.sidebar.text_input(f"ค้นหาด้วย พิกัด / ชื่อสถานที่ #{stop_num}", default_raw, key=f"dest_input_{j}", placeholder="เช่น 14.35, 100.57 หรือ อยุธยา")
+    raw_dest = st.sidebar.text_input(f"ค้นหาด้วย พิกัด / ชื่อสถานที่ #{stop_num}", key=f"dest_input_{j}", placeholder="เช่น 14.35, 100.57 หรือ อยุธยา")
     loc_dest, resolved_dest_name = parse_and_resolve_location(raw_dest)
-    custom_name = st.sidebar.text_input(f"ตั้งชื่อจุดส่งที่ {stop_num}", default_custom_name, key=f"dest_name_{j}", placeholder="เช่น สาขาอยุธยา หรือ คลัง B")
+    custom_name = st.sidebar.text_input(f"ตั้งชื่อจุดส่งที่ {stop_num}", key=f"dest_name_{j}", placeholder="เช่น สาขาอยุธยา หรือ คลัง B")
 
     final_display_name = custom_name.strip() or resolved_dest_name or f"จุดส่งที่ {stop_num}"
 
@@ -280,9 +317,7 @@ dest_map = {f"จุดส่งที่ {d['index']}: {d['display']}": d for d
 
 # 1.4 รถและการมอบหมายจุดส่ง
 st.sidebar.subheader("🚚 เงื่อนไขการขนส่งและตั้งค่าต่อคัน")
-saved_trucks_list = loaded_data.get("trucks", []) if loaded_data else []
-default_num_trucks = len(saved_trucks_list) if saved_trucks_list else 1
-num_trucks = st.sidebar.number_input("จำนวนรถที่ใช้ (คัน)", min_value=1, value=int(default_num_trucks), step=1)
+num_trucks = st.sidebar.number_input("จำนวนรถที่ใช้ (คัน)", min_value=1, step=1, key="num_trucks")
 
 truck_details, trucks_save_state, truck_routes_info, truck_stop_fees_breakdown = [], [], [], []
 total_base_trip_cost, total_extra_stop_fee, auto_total_distance_km = 0.0, 0.0, 0.0
@@ -296,46 +331,35 @@ type_options = [
     "รถเทรลเลอร์"
 ]
 
+ori_options = list(origin_map.keys())
+dest_options = list(dest_map.keys())
+
 for i in range(int(num_trucks)):
     st.sidebar.markdown(f"--- \n**🚛 คันที่ {i+1}**")
     color_info = ROUTE_COLORS[i % len(ROUTE_COLORS)]
     
-    saved_truck = saved_trucks_list[i] if i < len(saved_trucks_list) else {}
-    default_truck_type = saved_truck.get("type", "รถกระบะ 4 ล้อ")
-    default_calc_mode = saved_truck.get("calc_mode", "เหมาจ่ายต่อเที่ยว")
-    default_rate = saved_truck.get("rate", 0.0)
-    default_stop_fee = saved_truck.get("extra_stop_fee", 0.0)
-    default_start_fee = saved_truck.get("start_fee_from_stop", 2)
-    default_assigned_origin = saved_truck.get("origin_key", list(origin_map.keys())[0] if origin_map else "")
-    default_assigned_stops = saved_truck.get("stops_keys", list(dest_map.keys()) if num_trucks == 1 else [])
-
-    # เลือกระบุจุดต้นทางของคันนี้
-    ori_options = list(origin_map.keys())
-    ori_index = ori_options.index(default_assigned_origin) if default_assigned_origin in ori_options else 0
-    t_assigned_origin_key = st.sidebar.selectbox(f"จุดต้นทาง (คันที่ {i+1})", ori_options, index=ori_index, key=f"truck_origin_{i}")
+    t_assigned_origin_key = st.sidebar.selectbox(
+        f"จุดต้นทาง (คันที่ {i+1})", 
+        ori_options if ori_options else ["ไม่มีจุดต้นทาง"], 
+        key=f"truck_origin_{i}"
+    )
     selected_origin_obj = origin_map.get(t_assigned_origin_key)
 
-    type_index = type_options.index(default_truck_type) if default_truck_type in type_options else 0
-    t_type = st.sidebar.selectbox(f"ประเภทรถ (คันที่ {i+1})", type_options, index=type_index, key=f"truck_type_{i}")
+    t_type = st.sidebar.selectbox(f"ประเภทรถ (คันที่ {i+1})", type_options, key=f"truck_type_{i}")
     
     calc_mode_options = ["เหมาจ่ายต่อเที่ยว", "คิดราคาต่อถัง"]
-    mode_index = calc_mode_options.index(default_calc_mode) if default_calc_mode in calc_mode_options else 0
-    t_calc_mode = st.sidebar.radio(f"รูปแบบการคิดค่าขนส่ง (คันที่ {i+1})", calc_mode_options, index=mode_index, key=f"truck_mode_{i}")
+    t_calc_mode = st.sidebar.radio(f"รูปแบบการคิดค่าขนส่ง (คันที่ {i+1})", calc_mode_options, key=f"truck_mode_{i}")
 
     if t_calc_mode == "เหมาจ่ายต่อเที่ยว":
-        t_rate = st.sidebar.number_input(f"ค่าขนส่งเหมาจ่าย (คันที่ {i+1}) [บาท]", min_value=0.0, value=float(default_rate), step=100.0, format="%.2f", key=f"truck_rate_{i}")
+        t_rate = st.sidebar.number_input(f"ค่าขนส่งเหมาจ่าย (คันที่ {i+1}) [บาท]", min_value=0.0, step=100.0, format="%.2f", key=f"truck_rate_{i}")
         t_cost = t_rate
     else:
-        t_rate = st.sidebar.number_input(f"ค่าขนส่งราคาต่อถัง (คันที่ {i+1}) [บาท/ถัง]", min_value=0.0, value=float(default_rate), step=5.0, format="%.2f", key=f"truck_rate_{i}")
+        t_rate = st.sidebar.number_input(f"ค่าขนส่งราคาต่อถัง (คันที่ {i+1}) [บาท/ถัง]", min_value=0.0, step=5.0, format="%.2f", key=f"truck_rate_{i}")
         t_cost = t_rate * num_tanks
 
-    dest_options = list(dest_map.keys())
-    valid_default_stops = [s for s in default_assigned_stops if s in dest_options]
-    
     assigned_stops = st.sidebar.multiselect(
         f"จุดส่งที่รถคันที่ {i+1} วิ่งส่ง",
         options=dest_options,
-        default=valid_default_stops,
         key=f"truck_stops_{i}"
     )
     
@@ -366,13 +390,12 @@ for i in range(int(num_trucks)):
     t_start_fee_from = st.sidebar.number_input(
         f"เริ่มคิดค่าส่งเพิ่มคันที่ {i+1} ตั้งแต่จุดที่เท่าไร?",
         min_value=1, max_value=max(1, stops_count),
-        value=min(int(default_start_fee), max(1, stops_count)),
         step=1, key=f"truck_start_fee_{i}"
     )
     
     t_extra_stop_fee = st.sidebar.number_input(
         f"ค่าบริการเพิ่มต่อจุด (คันที่ {i+1}) [บาท/จุด]", 
-        min_value=0.0, value=float(default_stop_fee), 
+        min_value=0.0, 
         step=100.0, format="%.2f", key=f"truck_stop_fee_{i}"
     )
 
@@ -411,18 +434,16 @@ dist_options = [
     "อิงจากระยะทาง - คิดตั้งแต่กิโลเมตรแรก",
     "อิงจากระยะทาง - เหมาช่วงแรก เกินคิดเพิ่มต่อกิโลเมตร"
 ]
-default_dist_mode = loaded_data.get("use_distance_cost", "ไม่อิงจากระยะทาง (คิดเหมา)") if loaded_data else "ไม่อิงจากระยะทาง (คิดเหมา)"
-dist_index = dist_options.index(default_dist_mode) if default_dist_mode in dist_options else 0
-use_distance_cost = st.sidebar.radio("การคิดค่าขนส่งตามระยะทาง", dist_options, index=dist_index)
+use_distance_cost = st.sidebar.radio("การคิดค่าขนส่งตามระยะทาง", dist_options, key="use_distance_cost")
 
 base_free_km, cost_per_km, distance_cost = 0.0, 0.0, 0.0
 if use_distance_cost == "อิงจากระยะทาง - คิดตั้งแต่กิโลเมตรแรก":
-    cost_per_km = st.sidebar.number_input("อัตราค่าขนส่ง (บาท / กิโลเมตร)", min_value=0.0, value=float(loaded_data.get("cost_per_km", 0.0) if loaded_data else 0.0), step=0.5, format="%.2f")
+    cost_per_km = st.sidebar.number_input("อัตราค่าขนส่ง (บาท / กิโลเมตร)", min_value=0.0, step=0.5, format="%.2f", key="cost_per_km")
     distance_cost = distance_km * cost_per_km
     distance_detail_str = f"ค่าระยะทางรวม ({distance_km:,.2f} กม. x {cost_per_km:,.2f} บาท/กม.)"
 elif use_distance_cost == "อิงจากระยะทาง - เหมาช่วงแรก เกินคิดเพิ่มต่อกิโลเมตร":
-    base_free_km = st.sidebar.number_input("เหมาฟรีช่วงแรกระยะทางไม่เกิน (กิโลเมตร)", min_value=0.0, value=float(loaded_data.get("base_free_km", 0.0) if loaded_data else 0.0), step=5.0, format="%.2f")
-    cost_per_km = st.sidebar.number_input(f"ส่วนที่เกินกว่า {base_free_km:,.2f} กม. คิดเพิ่ม (บาท / กิโลเมตร)", min_value=0.0, value=float(loaded_data.get("cost_per_km", 0.0) if loaded_data else 0.0), step=0.5, format="%.2f")
+    base_free_km = st.sidebar.number_input("เหมาฟรีช่วงแรกระยะทางไม่เกิน (กิโลเมตร)", min_value=0.0, step=5.0, format="%.2f", key="base_free_km")
+    cost_per_km = st.sidebar.number_input(f"ส่วนที่เกินกว่า {base_free_km:,.2f} กม. คิดเพิ่ม (บาท / กิโลเมตร)", min_value=0.0, step=0.5, format="%.2f", key="cost_per_km")
     extra_km = max(0.0, distance_km - base_free_km)
     distance_cost = extra_km * cost_per_km
     distance_detail_str = f"ค่าระยะทางส่วนเกิน (รวม {distance_km:,.2f} กม. - เหมาฟรี {base_free_km:,.2f} กม. = เกิน {extra_km:,.2f} กม. x {cost_per_km:,.2f} ฿/กม.)"
@@ -431,13 +452,13 @@ else:
 
 # 1.6 ค่าแรงเด็กยก
 st.sidebar.subheader("👷 รายละเอียดค่าแรงและสวัสดิการเด็กยก")
-num_laborers = st.sidebar.number_input("จำนวนเด็กยกทั้งหมด (คน)", min_value=0, value=int(loaded_data.get("num_laborers", 0) if loaded_data else 0), step=1)
+num_laborers = st.sidebar.number_input("จำนวนเด็กยกทั้งหมด (คน)", min_value=0, step=1, key="num_laborers")
 
 if num_laborers > 0:
-    base_wage = st.sidebar.number_input("1. ค่าแรงพื้นฐาน (บาท/คน)", min_value=0.0, value=float(loaded_data.get("base_wage", 0.0) if loaded_data else 0.0), step=50.0, format="%.2f")
-    early_morning_fee = st.sidebar.number_input("2. ค่าออกเช้า (บาท/คน)", min_value=0.0, value=float(loaded_data.get("early_morning_fee", 0.0) if loaded_data else 0.0), step=10.0, format="%.2f")
-    diligence_allowance = st.sidebar.number_input("3. ค่าเบี้ยขยัน (บาท/คน)", min_value=0.0, value=float(loaded_data.get("diligence_allowance", 0.0) if loaded_data else 0.0), step=10.0, format="%.2f")
-    sso_company_fee = st.sidebar.number_input("4. ค่า บ.ส่ง ประกันสังคม (บาท/คน)", min_value=0.0, value=float(loaded_data.get("sso_company_fee", 0.0) if loaded_data else 0.0), step=5.0, format="%.2f")
+    base_wage = st.sidebar.number_input("1. ค่าแรงพื้นฐาน (บาท/คน)", min_value=0.0, step=50.0, format="%.2f", key="base_wage")
+    early_morning_fee = st.sidebar.number_input("2. ค่าออกเช้า (บาท/คน)", min_value=0.0, step=10.0, format="%.2f", key="early_morning_fee")
+    diligence_allowance = st.sidebar.number_input("3. ค่าเบี้ยขยัน (บาท/คน)", min_value=0.0, step=10.0, format="%.2f", key="diligence_allowance")
+    sso_company_fee = st.sidebar.number_input("4. ค่า บ.ส่ง ประกันสังคม (บาท/คน)", min_value=0.0, step=5.0, format="%.2f", key="sso_company_fee")
 else:
     base_wage = early_morning_fee = diligence_allowance = sso_company_fee = 0.0
 
@@ -446,11 +467,11 @@ total_labor_cost = cost_per_laborer * num_laborers
 
 # 1.7 ค่ายกถัง
 st.sidebar.subheader("📦 ค่ายกถังเพิ่มเติม")
-lifting_fee_per_tank = st.sidebar.number_input("ค่ายกต่อถัง (บาท)", min_value=0.0, value=float(loaded_data.get("lifting_fee_per_tank", 0.0) if loaded_data else 0.0), step=1.0, format="%.2f")
+lifting_fee_per_tank = st.sidebar.number_input("ค่ายกต่อถัง (บาท)", min_value=0.0, step=1.0, format="%.2f", key="lifting_fee_per_tank")
 
 # 1.8 ค่าเช่ารถโฟล์คลิฟท์
 st.sidebar.subheader("🚜 ค่าเช่ารถโฟล์คลิฟท์ (Forklift)")
-use_forklift = st.sidebar.checkbox("มีการใช้/เช่ารถโฟล์คลิฟท์", value=bool(loaded_data.get("use_forklift", False)) if loaded_data else False)
+use_forklift = st.sidebar.checkbox("มีการใช้/เช่ารถโฟล์คลิฟท์", key="use_forklift")
 
 forklift_rental_cost = 0.0
 forklift_driver_cost = 0.0
@@ -463,20 +484,18 @@ forklift_driver_wage_per_day = 0.0
 
 if use_forklift:
     forklift_mode_options = ["ค่าเช่ารวมคนขับ", "ค่าเช่าแยกกับคนขับ"]
-    default_forklift_mode = loaded_data.get("forklift_mode", "ค่าเช่ารวมคนขับ") if loaded_data else "ค่าเช่ารวมคนขับ"
-    mode_fk_index = forklift_mode_options.index(default_forklift_mode) if default_forklift_mode in forklift_mode_options else 0
-    forklift_mode = st.sidebar.radio("รูปแบบการเช่าโฟล์คลิฟท์", forklift_mode_options, index=mode_fk_index)
+    forklift_mode = st.sidebar.radio("รูปแบบการเช่าโฟล์คลิฟท์", forklift_mode_options, key="forklift_mode")
 
-    num_forklifts = st.sidebar.number_input("จำนวนรถโฟล์คลิฟท์ (คัน)", min_value=1, value=int(loaded_data.get("num_forklifts", 1) if loaded_data else 1), step=1)
-    forklift_days = st.sidebar.number_input("จำนวนวันที่ใช้งาน (วัน)", min_value=1, value=int(loaded_data.get("forklift_days", 1) if loaded_data else 1), step=1)
+    num_forklifts = st.sidebar.number_input("จำนวนรถโฟล์คลิฟท์ (คัน)", min_value=1, step=1, key="num_forklifts")
+    forklift_days = st.sidebar.number_input("จำนวนวันที่ใช้งาน (วัน)", min_value=1, step=1, key="forklift_days")
 
     if forklift_mode == "ค่าเช่ารวมคนขับ":
-        forklift_rate_per_day = st.sidebar.number_input("ค่าเช่ารวมคนขับ (บาท / คัน / วัน)", min_value=0.0, value=float(loaded_data.get("forklift_rate_per_day", 0.0) if loaded_data else 0.0), step=500.0, format="%.2f")
+        forklift_rate_per_day = st.sidebar.number_input("ค่าเช่ารวมคนขับ (บาท / คัน / วัน)", min_value=0.0, step=500.0, format="%.2f", key="forklift_rate_per_day")
         forklift_rental_cost = forklift_rate_per_day * num_forklifts * forklift_days
         total_forklift_cost = forklift_rental_cost
     else:
-        forklift_rate_per_day = st.sidebar.number_input("ค่าเช่าเฉพาะตัวรถ (บาท / คัน / วัน)", min_value=0.0, value=float(loaded_data.get("forklift_rate_per_day", 0.0) if loaded_data else 0.0), step=500.0, format="%.2f")
-        forklift_driver_wage_per_day = st.sidebar.number_input("ค่าแรงคนขับรถโฟล์คลิฟท์ (บาท / คน / วัน)", min_value=0.0, value=float(loaded_data.get("forklift_driver_wage_per_day", 0.0) if loaded_data else 0.0), step=100.0, format="%.2f")
+        forklift_rate_per_day = st.sidebar.number_input("ค่าเช่าเฉพาะตัวรถ (บาท / คัน / วัน)", min_value=0.0, step=500.0, format="%.2f", key="forklift_rate_per_day")
+        forklift_driver_wage_per_day = st.sidebar.number_input("ค่าแรงคนขับรถโฟล์คลิฟท์ (บาท / คน / วัน)", min_value=0.0, step=100.0, format="%.2f", key="forklift_driver_wage_per_day")
         
         forklift_rental_cost = forklift_rate_per_day * num_forklifts * forklift_days
         forklift_driver_cost = forklift_driver_wage_per_day * num_forklifts * forklift_days
@@ -514,6 +533,7 @@ if st.sidebar.button("💾 บันทึกข้อมูลนี้", use_c
             "forklift_driver_wage_per_day": forklift_driver_wage_per_day
         }
         save_history(history_dict)
+        st.session_state["selected_preset_key"] = save_preset_name.strip()
         st.sidebar.success(f"บันทึกรายการ '{save_preset_name.strip()}' สำเร็จ!")
         st.rerun()
 
