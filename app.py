@@ -140,7 +140,7 @@ history_dict = load_history()
 st.sidebar.header("📁 จัดการประวัติและรีเซ็ตระบบ")
 
 col_reset, col_backup = st.sidebar.columns(2)
-if col_reset.button("🔄 รีเซ็ตค่าใหม่ทั้งหมด", use_container_width=True):
+if col_reset.button("🔄 รีเซ็ตค่า", use_container_width=True):
     st.session_state.clear()
     st.session_state["selected_preset_key"] = "-- เลือกรายการเพื่อโหลด --"
     st.rerun()
