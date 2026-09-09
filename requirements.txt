@@ -1,4 +1,6 @@
 streamlit
 pandas
-openpyxl
-reportlab
+folium
+streamlit-folium
+geopy
+requests
