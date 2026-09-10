@@ -153,6 +153,7 @@ def apply_preset_to_session_state(preset_name):
     if not data:
         return
     
+    st.session_state["tank_input_mode"] = data.get("tank_input_mode", "ระบุแบบรวมทั้งหมด")
     st.session_state["num_tanks"] = int(data.get("num_tanks", 0))
     
     # ดึงข้อมูลจุดต้นทาง
@@ -181,15 +182,24 @@ def apply_preset_to_session_state(preset_name):
         st.session_state[f"truck_type_{i}"] = t.get("type", "รถกระบะ 4 ล้อ")
         st.session_state[f"truck_mode_{i}"] = t.get("calc_mode", "เหมาจ่ายต่อเที่ยว")
         st.session_state[f"truck_rate_{i}"] = float(t.get("rate", 0.0))
+        st.session_state[f"truck_tanks_{i}"] = int(t.get("tanks", 0))
+        st.session_state[f"truck_dist_{i}"] = float(t.get("dist_km", 0.0))
         st.session_state[f"truck_stops_{i}"] = t.get("stops_keys", [])
         st.session_state[f"truck_start_fee_{i}"] = int(t.get("start_fee_from_stop", 2))
         st.session_state[f"truck_stop_fee_{i}"] = float(t.get("extra_stop_fee", 0.0))
+        st.session_state[f"truck_num_laborers_{i}"] = int(t.get("num_laborers", 0))
+        st.session_state[f"truck_base_wage_{i}"] = float(t.get("base_wage", 0.0))
+        st.session_state[f"truck_early_morning_fee_{i}"] = float(t.get("early_morning_fee", 0.0))
+        st.session_state[f"truck_diligence_allowance_{i}"] = float(t.get("diligence_allowance", 0.0))
+        st.session_state[f"truck_sso_company_fee_{i}"] = float(t.get("sso_company_fee", 0.0))
 
     # ดึงข้อมูลเงื่อนไขต่างๆ
+    st.session_state["distance_input_mode"] = data.get("distance_input_mode", "รวมระยะทางทุกคัน")
     st.session_state["use_distance_cost"] = data.get("use_distance_cost", "ไม่อิงจากระยะทาง (คิดเหมา)")
     st.session_state["cost_per_km"] = float(data.get("cost_per_km", 0.0))
     st.session_state["base_free_km"] = float(data.get("base_free_km", 0.0))
     
+    st.session_state["labor_input_mode"] = data.get("labor_input_mode", "กำหนดค่าแรงแบบรวม")
     st.session_state["num_laborers"] = int(data.get("num_laborers", 0))
     st.session_state["base_wage"] = float(data.get("base_wage", 0.0))
     st.session_state["early_morning_fee"] = float(data.get("early_morning_fee", 0.0))
@@ -252,7 +262,16 @@ st.sidebar.markdown("---")
 st.sidebar.header("⚙️ กำหนดค่าและปัจจัยการคำนวณ")
 
 # 1.1 จำนวนถัง
-num_tanks = st.sidebar.number_input("จำนวนถังที่ส่งทั้งหมด (ถัง)", min_value=0, step=10, key="num_tanks")
+st.sidebar.subheader("📦 จำนวนถังที่จัดส่ง")
+tank_input_mode = st.sidebar.radio(
+    "รูปแบบการระบุจำนวนถัง",
+    ["ระบุแบบรวมทั้งหมด", "ระบุแยกรายคันรถ"],
+    key="tank_input_mode"
+)
+
+num_tanks = 0
+if tank_input_mode == "ระบุแบบรวมทั้งหมด":
+    num_tanks = st.sidebar.number_input("จำนวนถังที่ส่งทั้งหมด (ถัง)", min_value=0, step=10, key="num_tanks")
 
 # 1.2 จุดต้นทาง (รองรับหลายจุดต้นทาง)
 st.sidebar.subheader("🏬 จุดต้นทาง (คลัง / ศูนย์กระจายสินค้า)")
@@ -315,9 +334,41 @@ for j in range(int(num_destinations)):
 
 dest_map = {f"จุดส่งที่ {d['index']}: {d['display']}": d for d in destinations_data}
 
-# 1.4 รถและการมอบหมายจุดส่ง
+# 1.4 การตั้งค่าค่าแรงเด็กยก (ดูว่าจะตั้งแยกหรือตั้งรวม)
+st.sidebar.subheader("👷 รายละเอียดค่าแรงและสวัสดิการเด็กยก")
+labor_input_mode = st.sidebar.radio(
+    "รูปแบบการระบุค่าแรงเด็กยก",
+    ["กำหนดค่าแรงแบบรวม", "กำหนดแยกรายคันรถ"],
+    key="labor_input_mode"
+)
+
+num_laborers = 0
+base_wage = early_morning_fee = diligence_allowance = sso_company_fee = 0.0
+total_labor_cost = 0.0
+cost_per_laborer = 0.0
+
+if labor_input_mode == "กำหนดค่าแรงแบบรวม":
+    num_laborers = st.sidebar.number_input("จำนวนเด็กยกทั้งหมด (คน)", min_value=0, step=1, key="num_laborers")
+    if num_laborers > 0:
+        base_wage = st.sidebar.number_input("1. ค่าแรงพื้นฐาน (บาท/คน)", min_value=0.0, step=50.0, format="%.2f", key="base_wage")
+        early_morning_fee = st.sidebar.number_input("2. ค่าออกเช้า (บาท/คน)", min_value=0.0, step=10.0, format="%.2f", key="early_morning_fee")
+        diligence_allowance = st.sidebar.number_input("3. ค่าเบี้ยขยัน (บาท/คน)", min_value=0.0, step=10.0, format="%.2f", key="diligence_allowance")
+        sso_company_fee = st.sidebar.number_input("4. ค่า บ.ส่ง ประกันสังคม (บาท/คน)", min_value=0.0, step=5.0, format="%.2f", key="sso_company_fee")
+    
+    cost_per_laborer = base_wage + early_morning_fee + diligence_allowance + sso_company_fee
+    total_labor_cost = cost_per_laborer * num_laborers
+
+# 1.5 รถและการมอบหมายจุดส่ง
 st.sidebar.subheader("🚚 เงื่อนไขการขนส่งและตั้งค่าต่อคัน")
 num_trucks = st.sidebar.number_input("จำนวนรถที่ใช้ (คัน)", min_value=1, step=1, key="num_trucks")
+
+# รูปแบบระยะทางจัดส่ง
+st.sidebar.subheader("📏 เงื่อนไขระยะทางจัดส่ง")
+distance_input_mode = st.sidebar.radio(
+    "รูปแบบการระบุระยะทาง",
+    ["รวมระยะทางทุกคัน", "แยกระยะทางตามรายคัน"],
+    key="distance_input_mode"
+)
 
 truck_details, trucks_save_state, truck_routes_info, truck_stop_fees_breakdown = [], [], [], []
 total_base_trip_cost, total_extra_stop_fee, auto_total_distance_km = 0.0, 0.0, 0.0
@@ -334,6 +385,10 @@ type_options = [
 ori_options = list(origin_map.keys())
 dest_options = list(dest_map.keys())
 
+sum_tanks_from_trucks = 0
+sum_laborers_from_trucks = 0
+sum_labor_cost_from_trucks = 0.0
+
 for i in range(int(num_trucks)):
     st.sidebar.markdown(f"--- \n**🚛 คันที่ {i+1}**")
     color_info = ROUTE_COLORS[i % len(ROUTE_COLORS)]
@@ -347,6 +402,12 @@ for i in range(int(num_trucks)):
 
     t_type = st.sidebar.selectbox(f"ประเภทรถ (คันที่ {i+1})", type_options, key=f"truck_type_{i}")
     
+    # กำหนดจำนวนถังถ้าระบุแยกรายคัน
+    t_tanks = 0
+    if tank_input_mode == "ระบุแยกรายคันรถ":
+        t_tanks = st.sidebar.number_input(f"จำนวนถังที่บรรทุก (คันที่ {i+1}) [ถัง]", min_value=0, step=5, key=f"truck_tanks_{i}")
+        sum_tanks_from_trucks += t_tanks
+
     calc_mode_options = ["เหมาจ่ายต่อเที่ยว", "คิดราคาต่อถัง"]
     t_calc_mode = st.sidebar.radio(f"รูปแบบการคิดค่าขนส่ง (คันที่ {i+1})", calc_mode_options, key=f"truck_mode_{i}")
 
@@ -355,7 +416,8 @@ for i in range(int(num_trucks)):
         t_cost = t_rate
     else:
         t_rate = st.sidebar.number_input(f"ค่าขนส่งราคาต่อถัง (คันที่ {i+1}) [บาท/ถัง]", min_value=0.0, step=5.0, format="%.2f", key=f"truck_rate_{i}")
-        t_cost = t_rate * num_tanks
+        current_truck_tanks = t_tanks if tank_input_mode == "ระบุแยกรายคันรถ" else num_tanks
+        t_cost = t_rate * current_truck_tanks
 
     assigned_stops = st.sidebar.multiselect(
         f"จุดส่งที่รถคันที่ {i+1} วิ่งส่ง",
@@ -374,7 +436,37 @@ for i in range(int(num_trucks)):
             truck_coords.append(target_dest["coord"])
 
     t_dist_km, t_route_pts = get_multi_stop_route(truck_coords) if len(truck_coords) >= 2 else (0.0, [])
+    
+    # กรณีเลือกเปิดการป้อนระยะทางแยกรายคัน
+    if distance_input_mode == "แยกระยะทางตามรายคัน":
+        t_dist_km = st.sidebar.number_input(
+            f"ระยะทางขนส่ง (คันที่ {i+1}) [กิโลเมตร]", 
+            min_value=0.0, 
+            value=float(t_dist_km), 
+            step=1.0, 
+            format="%.2f", 
+            key=f"truck_dist_{i}"
+        )
+    
     auto_total_distance_km += t_dist_km
+
+    # กรณีเลือกเปิดการป้อนค่าแรงเด็กยกแยกรายคัน
+    t_num_laborers = 0
+    t_base_wage = t_early_morning_fee = t_diligence_allowance = t_sso_company_fee = 0.0
+    if labor_input_mode == "กำหนดแยกรายคันรถ":
+        st.sidebar.markdown(f"**👷 เด็กยกประจำคันที่ {i+1}**")
+        t_num_laborers = st.sidebar.number_input(f"จำนวนเด็กยก (คันที่ {i+1}) [คน]", min_value=0, step=1, key=f"truck_num_laborers_{i}")
+        if t_num_laborers > 0:
+            t_base_wage = st.sidebar.number_input(f"ค่าแรงพื้นฐาน (คันที่ {i+1}) [บาท/คน]", min_value=0.0, step=50.0, format="%.2f", key=f"truck_base_wage_{i}")
+            t_early_morning_fee = st.sidebar.number_input(f"ค่าออกเช้า (คันที่ {i+1}) [บาท/คน]", min_value=0.0, step=10.0, format="%.2f", key=f"truck_early_morning_fee_{i}")
+            t_diligence_allowance = st.sidebar.number_input(f"ค่าเบี้ยขยัน (คันที่ {i+1}) [บาท/คน]", min_value=0.0, step=10.0, format="%.2f", key=f"truck_diligence_allowance_{i}")
+            t_sso_company_fee = st.sidebar.number_input(f"ค่า บ.ส่ง ประกันสังคม (คันที่ {i+1}) [บาท/คน]", min_value=0.0, step=5.0, format="%.2f", key=f"truck_sso_company_fee_{i}")
+        
+        t_cost_per_lab = t_base_wage + t_early_morning_fee + t_diligence_allowance + t_sso_company_fee
+        t_total_lab_cost = t_cost_per_lab * t_num_laborers
+        
+        sum_laborers_from_trucks += t_num_laborers
+        sum_labor_cost_from_trucks += t_total_lab_cost
 
     truck_routes_info.append({
         "truck_index": i + 1,
@@ -410,24 +502,41 @@ for i in range(int(num_trucks)):
         })
 
     ori_name_tag = selected_origin_obj['display'] if selected_origin_obj else 'ไม่ระบุ'
+    t_tank_display = t_tanks if tank_input_mode == "ระบุแยกรายคันรถ" else num_tanks
+    
     if t_calc_mode == "เหมาจ่ายต่อเที่ยว":
         truck_details.append(f"{t_type} [จาก: {ori_name_tag}] ({t_cost:,.2f} ฿ - วิ่ง {stops_count} จุด / {t_dist_km:,.2f} กม.)")
     else:
-        truck_details.append(f"{t_type} [จาก: {ori_name_tag}] ({t_rate:,.2f} ฿/ถัง x {num_tanks} ถัง = {t_cost:,.2f} ฿ - วิ่ง {stops_count} จุด / {t_dist_km:,.2f} กม.)")
+        truck_details.append(f"{t_type} [จาก: {ori_name_tag}] ({t_rate:,.2f} ฿/ถัง x {t_tank_display} ถัง = {t_cost:,.2f} ฿ - วิ่ง {stops_count} จุด / {t_dist_km:,.2f} กม.)")
 
     trucks_save_state.append({
         "type": t_type, 
         "calc_mode": t_calc_mode, 
         "rate": float(t_rate),
+        "tanks": int(t_tanks),
+        "dist_km": float(t_dist_km),
         "extra_stop_fee": float(t_extra_stop_fee), 
         "start_fee_from_stop": int(t_start_fee_from),
         "origin_key": t_assigned_origin_key,
-        "stops_keys": assigned_stops
+        "stops_keys": assigned_stops,
+        "num_laborers": int(t_num_laborers),
+        "base_wage": float(t_base_wage),
+        "early_morning_fee": float(t_early_morning_fee),
+        "diligence_allowance": float(t_diligence_allowance),
+        "sso_company_fee": float(t_sso_company_fee)
     })
     total_base_trip_cost += float(t_cost)
 
-# 1.5 ระยะทาง
-st.sidebar.subheader("📏 เงื่อนไขระยะทาง")
+# อัปเดตค่าจำนวนถังและค่าแรงเด็กยกหากเลือกป้อนแบบแยกรายคัน
+if tank_input_mode == "ระบุแยกรายคันรถ":
+    num_tanks = sum_tanks_from_trucks
+
+if labor_input_mode == "กำหนดแยกรายคันรถ":
+    num_laborers = sum_laborers_from_trucks
+    total_labor_cost = sum_labor_cost_from_trucks
+
+# 1.6 การคำนวณราคาตามระยะทาง
+st.sidebar.markdown("---")
 distance_km = st.sidebar.number_input("ระยะทางรวมทุกคัน (กิโลเมตร)", min_value=0.0, value=float(auto_total_distance_km), step=1.0, format="%.2f")
 dist_options = [
     "ไม่อิงจากระยะทาง (คิดเหมา)",
@@ -449,21 +558,6 @@ elif use_distance_cost == "อิงจากระยะทาง - เหม�
     distance_detail_str = f"ค่าระยะทางส่วนเกิน (รวม {distance_km:,.2f} กม. - เหมาฟรี {base_free_km:,.2f} กม. = เกิน {extra_km:,.2f} กม. x {cost_per_km:,.2f} ฿/กม.)"
 else:
     distance_detail_str = f"ค่าระยะทางรวม ({distance_km:,.2f} กม. - คิดเหมา)"
-
-# 1.6 ค่าแรงเด็กยก
-st.sidebar.subheader("👷 รายละเอียดค่าแรงและสวัสดิการเด็กยก")
-num_laborers = st.sidebar.number_input("จำนวนเด็กยกทั้งหมด (คน)", min_value=0, step=1, key="num_laborers")
-
-if num_laborers > 0:
-    base_wage = st.sidebar.number_input("1. ค่าแรงพื้นฐาน (บาท/คน)", min_value=0.0, step=50.0, format="%.2f", key="base_wage")
-    early_morning_fee = st.sidebar.number_input("2. ค่าออกเช้า (บาท/คน)", min_value=0.0, step=10.0, format="%.2f", key="early_morning_fee")
-    diligence_allowance = st.sidebar.number_input("3. ค่าเบี้ยขยัน (บาท/คน)", min_value=0.0, step=10.0, format="%.2f", key="diligence_allowance")
-    sso_company_fee = st.sidebar.number_input("4. ค่า บ.ส่ง ประกันสังคม (บาท/คน)", min_value=0.0, step=5.0, format="%.2f", key="sso_company_fee")
-else:
-    base_wage = early_morning_fee = diligence_allowance = sso_company_fee = 0.0
-
-cost_per_laborer = base_wage + early_morning_fee + diligence_allowance + sso_company_fee
-total_labor_cost = cost_per_laborer * num_laborers
 
 # 1.7 ค่ายกถัง
 st.sidebar.subheader("📦 ค่ายกถังเพิ่มเติม")
@@ -512,13 +606,16 @@ save_preset_name = st.sidebar.text_input("ตั้งชื่อรายก�
 if st.sidebar.button("💾 บันทึกข้อมูลนี้", use_container_width=True):
     if save_preset_name.strip():
         history_dict[save_preset_name.strip()] = {
+            "tank_input_mode": tank_input_mode,
             "num_tanks": num_tanks,
             "origins": [{"raw": o["raw"], "custom_name": o["custom_name"]} for o in origins_data],
             "destinations": [{"raw": d["raw"], "custom_name": d["custom_name"]} for d in destinations_data],
             "trucks": trucks_save_state,
+            "distance_input_mode": distance_input_mode,
             "use_distance_cost": use_distance_cost, 
             "base_free_km": base_free_km,
             "cost_per_km": cost_per_km, 
+            "labor_input_mode": labor_input_mode,
             "num_laborers": num_laborers,
             "base_wage": base_wage, 
             "early_morning_fee": early_morning_fee,
@@ -549,7 +646,12 @@ st.markdown("<h3 style='margin-bottom: 0.8rem;'>📊 1. ตารางราค
 col1, col2 = st.columns([2, 1])
 
 trucks_summary_str = f"ค่าขนส่งพื้นฐานรวม ({num_trucks} คัน: {', '.join(truck_details)})"
-labor_detail_str = f"ค่าแรงและสวัสดิการเด็กยก ({num_laborers} คน @ คนละ {cost_per_laborer:,.2f} ฿)"
+
+if labor_input_mode == "กำหนดค่าแรงแบบรวม":
+    labor_detail_str = f"ค่าแรงและสวัสดิการเด็กยก รวม ({num_laborers} คน @ คนละ {cost_per_laborer:,.2f} ฿)"
+else:
+    labor_detail_str = f"ค่าแรงและสวัสดิการเด็กยก รวมระบุตามคันรถ ({num_laborers} คน)"
+
 origins_summary_list = [f"คลัง {o['index']}: {o['display']}" for o in origins_data]
 dest_summary_list = [f"จุด {d['index']}: {d['display']}" for d in destinations_data]
 route_summary_str = f"[{', '.join(origins_summary_list)}] ➔ " + " ➔ ".join(dest_summary_list)
@@ -574,16 +676,24 @@ with col1:
     breakdown_costs.append(total_labor_cost)
 
     if show_sub_items:
-        breakdown_items.extend([
-            f"  └─ ค่าแรงพื้นฐาน ({num_laborers} คน x {base_wage:,.2f} ฿)",
-            f"  └─ ค่าออกเช้า ({num_laborers} คน x {early_morning_fee:,.2f} ฿)",
-            f"  └─ ค่าเบี้ยขยัน ({num_laborers} คน x {diligence_allowance:,.2f} ฿)",
-            f"  └─ ค่า บ.ส่ง ประกันสังคม ({num_laborers} คน x {sso_company_fee:,.2f} ฿)",
-        ])
-        breakdown_costs.extend([
-            base_wage * num_laborers, early_morning_fee * num_laborers,
-            diligence_allowance * num_laborers, sso_company_fee * num_laborers,
-        ])
+        if labor_input_mode == "กำหนดค่าแรงแบบรวม":
+            breakdown_items.extend([
+                f"  └─ ค่าแรงพื้นฐาน ({num_laborers} คน x {base_wage:,.2f} ฿)",
+                f"  └─ ค่าออกเช้า ({num_laborers} คน x {early_morning_fee:,.2f} ฿)",
+                f"  └─ ค่าเบี้ยขยัน ({num_laborers} คน x {diligence_allowance:,.2f} ฿)",
+                f"  └─ ค่า บ.ส่ง ประกันสังคม ({num_laborers} คน x {sso_company_fee:,.2f} ฿)",
+            ])
+            breakdown_costs.extend([
+                base_wage * num_laborers, early_morning_fee * num_laborers,
+                diligence_allowance * num_laborers, sso_company_fee * num_laborers,
+            ])
+        else:
+            for idx, tr in enumerate(trucks_save_state):
+                nl = tr["num_laborers"]
+                if nl > 0:
+                    t_c = (tr["base_wage"] + tr["early_morning_fee"] + tr["diligence_allowance"] + tr["sso_company_fee"]) * nl
+                    breakdown_items.append(f"  └─ คันที่ {idx+1} ({tr['type']}): เด็กยก {nl} คน (รวม {t_c:,.2f} ฿)")
+                    breakdown_costs.append(t_c)
 
     breakdown_items.append(f"ค่ายกถัง ({num_tanks} ถัง x {lifting_fee_per_tank:,.2f} ฿)")
     breakdown_costs.append(total_lifting_fee)
