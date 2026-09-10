@@ -29,9 +29,12 @@ st.markdown("""
 
 st.markdown("<h2 style='margin-bottom: 1rem;'>🚚 แพลตฟอร์มคำนวณค่าขนส่งและวางแผนเส้นทาง</h2>", unsafe_allow_html=True)
 
-# Initialize geolocator
-geolocator = ArcGIS(timeout=10)
+# Initialize geolocator & Global Caches
+geolocator = ArcGIS(timeout=5)
 HISTORY_FILE = "history_data.json"
+
+if "geo_cache" not in st.session_state:
+    st.session_state["geo_cache"] = {}
 
 ROUTE_COLORS = [
     {"line": "#1f77b4", "marker": "blue"},
@@ -60,8 +63,11 @@ def save_history(data):
     with open(HISTORY_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
 
-@st.cache_data(ttl=86400)
 def reverse_geocode(lat, lon):
+    cache_key = f"rev_{lat:.4f}_{lon:.4f}"
+    if cache_key in st.session_state["geo_cache"]:
+        return st.session_state["geo_cache"][cache_key]
+
     try:
         location = geolocator.reverse(f"{lat}, {lon}")
         if location and location.raw:
@@ -80,14 +86,16 @@ def reverse_geocode(lat, lon):
                 province_txt = f"จ.{region}" if region else ""
 
             parts = [p for p in [sub_txt, district_txt, province_txt] if p]
-            if parts:
-                return " ".join(parts)
-            return location.address
+            res = " ".join(parts) if parts else location.address
+            st.session_state["geo_cache"][cache_key] = res
+            return res
     except Exception:
         pass
-    return f"{lat:.4f}, {lon:.4f}"
+    
+    fallback = f"{lat:.4f}, {lon:.4f}"
+    st.session_state["geo_cache"][cache_key] = fallback
+    return fallback
 
-@st.cache_data(ttl=86400)
 def parse_and_resolve_location(text_input):
     if not text_input:
         return None, ""
@@ -95,40 +103,50 @@ def parse_and_resolve_location(text_input):
     if not text:
         return None, ""
     
+    if text in st.session_state["geo_cache"]:
+        return st.session_state["geo_cache"][text]
+
     if "," in text:
         try:
             parts = text.split(",")
             lat, lon = float(parts[0].strip()), float(parts[1].strip())
             readable_name = reverse_geocode(lat, lon)
-            return (lat, lon), readable_name
+            res = ((lat, lon), readable_name)
+            st.session_state["geo_cache"][text] = res
+            return res
         except ValueError:
             pass
 
     try:
         location = geolocator.geocode(text)
         if location:
-            return (location.latitude, location.longitude), text
+            res = ((location.latitude, location.longitude), text)
+            st.session_state["geo_cache"][text] = res
+            return res
     except Exception:
         pass
-    return None, text
+    
+    res = (None, text)
+    st.session_state["geo_cache"][text] = res
+    return res
 
-@st.cache_data(ttl=3600)
-def get_multi_stop_route(coords_list):
-    if len(coords_list) < 2:
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_multi_stop_route(coords_tuple):
+    if not coords_tuple or len(coords_tuple) < 2:
         return 0.0, []
     
-    loc_str = ";".join([f"{c[1]},{c[0]}" for c in coords_list])
+    loc_str = ";".join([f"{c[1]},{c[0]}" for c in coords_tuple])
     try:
         osrm_url = f"https://router.project-osrm.org/route/v1/driving/{loc_str}?overview=full&geometries=geojson"
-        response = requests.get(osrm_url, timeout=5)
-        data = response.json()
-        
-        if "routes" in data and len(data["routes"]) > 0:
-            distance_meters = data["routes"][0]["distance"]
-            distance_km = round(distance_meters / 1000.0, 2)
-            geometry = data["routes"][0]["geometry"]["coordinates"]
-            route_points = [[point[1], point[0]] for point in geometry]
-            return distance_km, route_points
+        response = requests.get(osrm_url, timeout=3)
+        if response.status_code == 200:
+            data = response.json()
+            if "routes" in data and len(data["routes"]) > 0:
+                distance_meters = data["routes"][0]["distance"]
+                distance_km = round(distance_meters / 1000.0, 2)
+                geometry = data["routes"][0]["geometry"]["coordinates"]
+                route_points = [[point[1], point[0]] for point in geometry]
+                return distance_km, route_points
     except Exception:
         pass
     return 0.0, []
@@ -261,25 +279,26 @@ with st.sidebar.expander("📥 Export / Import สำรองไฟล์ปร
     
     uploaded_file = st.file_uploader("📂 อัปโหลดไฟล์ประวัติกลับเข้ามาระบบ", type=["json"], key="history_uploader")
     if uploaded_file is not None:
-        try:
-            imported_data = json.load(uploaded_file)
-            if isinstance(imported_data, dict) and len(imported_data) > 0:
-                # อัปเดตไฟล์ประวัติในเครื่อง
-                history_dict.update(imported_data)
-                save_history(history_dict)
-                
-                # ดึงรายการแรกที่นำเข้าเพื่อโหลดทันที
-                first_key = list(imported_data.keys())[0]
-                apply_preset_to_session_state(first_key, imported_data)
-                
-                # ตั้งค่าคีย์รอการปรับเปลี่ยน แล้วทำการ rerun อย่างปลอดภัย
-                st.session_state["pending_preset_key"] = first_key
-                st.success(f"นำเข้าข้อมูลสำเร็จ! โหลดรายการ '{first_key}' แล้ว")
-                st.rerun()
-            else:
-                st.error("ไฟล์ JSON ไม่มีข้อมูล หรือรูปแบบไม่ถูกต้อง")
-        except Exception as e:
-            st.error(f"เกิดข้อผิดพลาดในการอ่านไฟล์: {e}")
+        # ใช้ Flag ป้องกันการทำงานซ้ำวนลูป
+        file_id = f"{uploaded_file.name}_{uploaded_file.size}"
+        if st.session_state.get("last_uploaded_file_id") != file_id:
+            try:
+                imported_data = json.load(uploaded_file)
+                if isinstance(imported_data, dict) and len(imported_data) > 0:
+                    history_dict.update(imported_data)
+                    save_history(history_dict)
+                    
+                    first_key = list(imported_data.keys())[0]
+                    apply_preset_to_session_state(first_key, imported_data)
+                    
+                    st.session_state["last_uploaded_file_id"] = file_id
+                    st.session_state["pending_preset_key"] = first_key
+                    st.sidebar.success(f"นำเข้าข้อมูลสำเร็จ! โหลด '{first_key}' แล้ว")
+                    st.rerun()
+                else:
+                    st.sidebar.error("ไฟล์ JSON ไม่มีข้อมูล หรือรูปแบบไม่ถูกต้อง")
+            except Exception as e:
+                st.sidebar.error(f"เกิดข้อผิดพลาดในการอ่านไฟล์: {e}")
 
 st.sidebar.markdown("---")
 
@@ -427,7 +446,6 @@ for i in range(int(num_trucks)):
 
     t_type = st.sidebar.selectbox(f"ประเภทรถ (คันที่ {i+1})", type_options, key=f"truck_type_{i}")
     
-    # กำหนดจำนวนถังถ้าระบุแยกรายคัน
     t_tanks = 0
     if tank_input_mode == "ระบุแยกรายคันรถ":
         t_tanks = st.sidebar.number_input(f"จำนวนถังที่บรรทุก (คันที่ {i+1}) [ถัง]", min_value=0, step=5, key=f"truck_tanks_{i}")
@@ -460,10 +478,10 @@ for i in range(int(num_trucks)):
         if target_dest and target_dest["coord"]:
             truck_coords.append(target_dest["coord"])
 
-    # คำนวณระยะทางจาก OSRM
-    osrm_dist_km, t_route_pts = get_multi_stop_route(truck_coords) if len(truck_coords) >= 2 else (0.0, [])
+    # คำนวณระยะทางจาก OSRM ผ่าน Tuple เพื่อเปิดใช้ Cache
+    coords_tuple = tuple(truck_coords)
+    osrm_dist_km, t_route_pts = get_multi_stop_route(coords_tuple) if len(coords_tuple) >= 2 else (0.0, [])
     
-    # กรณีเลือกเปิดการป้อนระยะทางแยกรายคัน
     if distance_input_mode == "แยกระยะทางตามรายคัน":
         if f"truck_dist_{i}" not in st.session_state:
             st.session_state[f"truck_dist_{i}"] = float(osrm_dist_km)
@@ -482,7 +500,6 @@ for i in range(int(num_trucks)):
     
     auto_total_distance_km += t_dist_km
 
-    # กรณีเลือกเปิดการป้อนค่าแรงเด็กยกแยกรายคัน
     t_num_laborers = 0
     t_base_wage = t_early_morning_fee = t_diligence_allowance = t_sso_company_fee = 0.0
     if labor_input_mode == "กำหนดแยกรายคันรถ":
@@ -559,7 +576,6 @@ for i in range(int(num_trucks)):
     })
     total_base_trip_cost += float(t_cost)
 
-# อัปเดตค่าจำนวนถังและค่าแรงเด็กยกหากเลือกป้อนแบบแยกรายคัน
 if tank_input_mode == "ระบุแยกรายคันรถ":
     num_tanks = sum_tanks_from_trucks
 
@@ -762,7 +778,6 @@ with col1:
                 breakdown_items.append(f"  └─ ค่าแรงคนขับโฟล์คลิฟท์ ({num_forklifts} คน x {forklift_days} วัน @ {forklift_driver_wage_per_day:,.2f} ฿)")
                 breakdown_costs.append(forklift_driver_cost)
 
-    # แปลงรูปแบบแสดงผลตัวเลขใน DataFrame
     formatted_costs = []
     for c in breakdown_costs:
         if isinstance(c, (int, float)):
@@ -787,7 +802,6 @@ with col2:
 st.markdown("---")
 st.markdown("### 🗺️ แผนที่เส้นทางจัดส่งสินค้า")
 
-# คำนวณพิกัดกลางเพื่อสร้างศูนย์กลางแผนที่
 all_valid_coords = []
 for o in origins_data:
     if o["coord"]:
@@ -802,12 +816,11 @@ if all_valid_coords:
     map_center = [avg_lat, avg_lon]
     zoom_level = 10
 else:
-    map_center = [13.7563, 100.5018]  # กรุงเทพมหานครเป็นค่าเริ่มต้น
+    map_center = [13.7563, 100.5018]
     zoom_level = 6
 
 m = folium.Map(location=map_center, zoom_start=zoom_level)
 
-# ปักหมุดคลังสินค้า/จุดต้นทาง
 for o in origins_data:
     if o["coord"]:
         folium.Marker(
@@ -817,7 +830,6 @@ for o in origins_data:
             icon=folium.Icon(color="black", icon="home", prefix="fa")
         ).add_to(m)
 
-# ปักหมุดจุดส่งปลายทาง
 for d in destinations_data:
     if d["coord"]:
         folium.Marker(
@@ -827,7 +839,6 @@ for d in destinations_data:
             icon=folium.Icon(color="red", icon="info-sign")
         ).add_to(m)
 
-# วาดเส้นทางสำหรับรถแต่ละคัน
 for r in truck_routes_info:
     c_line = r["color"]["line"]
     if r["route_points"]:
