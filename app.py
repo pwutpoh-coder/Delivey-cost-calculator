@@ -36,6 +36,7 @@ HISTORY_FILE = "history_data.json"
 if "geo_cache" not in st.session_state:
     st.session_state["geo_cache"] = {}
 
+# ชุดสี Folium Supported Colors
 ROUTE_COLORS = [
     {"line": "#1f77b4", "marker": "blue"},
     {"line": "#ff7f0e", "marker": "orange"},
@@ -138,7 +139,7 @@ def get_multi_stop_route(coords_tuple):
     loc_str = ";".join([f"{c[1]},{c[0]}" for c in coords_tuple])
     try:
         osrm_url = f"https://router.project-osrm.org/route/v1/driving/{loc_str}?overview=full&geometries=geojson"
-        response = requests.get(osrm_url, timeout=3)
+        response = requests.get(osrm_url, timeout=4)
         if response.status_code == 200:
             data = response.json()
             if "routes" in data and len(data["routes"]) > 0:
@@ -228,7 +229,7 @@ def apply_preset_to_session_state(preset_name, data_source=None):
     st.session_state["forklift_rate_per_day"] = float(data.get("forklift_rate_per_day", 0.0))
     st.session_state["forklift_driver_wage_per_day"] = float(data.get("forklift_driver_wage_per_day", 0.0))
 
-# --- จัดการ Pending Preset Key ก่อนที่ Widget Selectbox จะถูกสร้างขึ้น ---
+# --- จัดการ Pending Preset Key ---
 if "pending_preset_key" in st.session_state:
     st.session_state["selected_preset_key"] = st.session_state.pop("pending_preset_key")
 
@@ -246,7 +247,6 @@ if col_reset.button("🔄 รีเซ็ตค่า", use_container_width=True
 
 options_list = ["-- เลือกรายการเพื่อโหลด --"] + list(history_dict.keys())
 
-# ตรวจสอบว่าคีย์ที่เลือกยังคงอยู่ในตัวเลือกหรือไม่
 if st.session_state["selected_preset_key"] not in options_list:
     st.session_state["selected_preset_key"] = "-- เลือกรายการเพื่อโหลด --"
 
@@ -279,7 +279,6 @@ with st.sidebar.expander("📥 Export / Import สำรองไฟล์ปร
     
     uploaded_file = st.file_uploader("📂 อัปโหลดไฟล์ประวัติกลับเข้ามาระบบ", type=["json"], key="history_uploader")
     if uploaded_file is not None:
-        # ใช้ Flag ป้องกันการทำงานซ้ำวนลูป
         file_id = f"{uploaded_file.name}_{uploaded_file.size}"
         if st.session_state.get("last_uploaded_file_id") != file_id:
             try:
@@ -317,7 +316,7 @@ num_tanks = 0
 if tank_input_mode == "ระบุแบบรวมทั้งหมด":
     num_tanks = st.sidebar.number_input("จำนวนถังที่ส่งทั้งหมด (ถัง)", min_value=0, step=10, key="num_tanks")
 
-# 1.2 จุดต้นทาง (รองรับหลายจุดต้นทาง)
+# 1.2 จุดต้นทาง
 st.sidebar.subheader("🏬 จุดต้นทาง (คลัง / ศูนย์กระจายสินค้า)")
 
 num_origins = st.sidebar.number_input("จำนวนจุดต้นทาง/คลังทั้งหมด", min_value=1, step=1, key="num_origins")
@@ -433,6 +432,9 @@ sum_tanks_from_trucks = 0
 sum_laborers_from_trucks = 0
 sum_labor_cost_from_trucks = 0.0
 
+# Map จุดส่ง -> สีหมุดของรถคันที่สืบทอด
+dest_assigned_color_map = {}
+
 for i in range(int(num_trucks)):
     st.sidebar.markdown(f"--- \n**🚛 คันที่ {i+1}**")
     color_info = ROUTE_COLORS[i % len(ROUTE_COLORS)]
@@ -468,6 +470,15 @@ for i in range(int(num_trucks)):
         key=f"truck_stops_{i}"
     )
     
+    # บันทึกสีของรถลงในจุดส่งปลายทาง
+    for stop_label in assigned_stops:
+        target_dest = dest_map.get(stop_label)
+        if target_dest:
+            dest_assigned_color_map[target_dest["index"]] = {
+                "color": color_info["marker"],
+                "truck_num": i + 1
+            }
+
     stops_count = len(assigned_stops)
     truck_coords = []
     if selected_origin_obj and selected_origin_obj["coord"]:
@@ -478,20 +489,22 @@ for i in range(int(num_trucks)):
         if target_dest and target_dest["coord"]:
             truck_coords.append(target_dest["coord"])
 
-    # คำนวณระยะทางจาก OSRM ผ่าน Tuple เพื่อเปิดใช้ Cache
+    # คำนวณระยะทางจาก OSRM
     coords_tuple = tuple(truck_coords)
     osrm_dist_km, t_route_pts = get_multi_stop_route(coords_tuple) if len(coords_tuple) >= 2 else (0.0, [])
     
+    # แก้ไขปัญหาระยะทางขึ้น 0: Auto sync ค่าจาก OSRM เมื่อยังไม่มีข้อมูลใน Session State หรือค่านั้นเป็น 0
     if distance_input_mode == "แยกระยะทางตามรายคัน":
-        if f"truck_dist_{i}" not in st.session_state:
-            st.session_state[f"truck_dist_{i}"] = float(osrm_dist_km)
+        dist_key = f"truck_dist_{i}"
+        if dist_key not in st.session_state or st.session_state[dist_key] == 0.0:
+            st.session_state[dist_key] = float(osrm_dist_km)
 
         t_dist_km = st.sidebar.number_input(
             f"ระยะทางขนส่ง คันที่ {i+1} (กิโลเมตร)", 
             min_value=0.0, 
             step=1.0, 
             format="%.2f", 
-            key=f"truck_dist_{i}"
+            key=dist_key
         )
         if osrm_dist_km > 0:
             st.sidebar.caption(f"📏 ระยะทางคำนวณจากแผนที่ถนนจริง: **{osrm_dist_km:,.2f} กม.**")
@@ -800,7 +813,7 @@ with col2:
 
 # --- ส่วนที่ 4: แสดงผลแผนที่ Folium ---
 st.markdown("---")
-st.markdown("### 🗺️ แผนที่เส้นทางจัดส่งสินค้า")
+st.markdown("### 🗺️ แผนที่เส้นทางจัดส่งสินค้า (แยกตามคันรถ)")
 
 all_valid_coords = []
 for o in origins_data:
@@ -821,6 +834,7 @@ else:
 
 m = folium.Map(location=map_center, zoom_start=zoom_level)
 
+# 1. ปักหมุดคลังสินค้า (ใช้สีดำไอคอนบ้าน)
 for o in origins_data:
     if o["coord"]:
         folium.Marker(
@@ -830,15 +844,27 @@ for o in origins_data:
             icon=folium.Icon(color="black", icon="home", prefix="fa")
         ).add_to(m)
 
+# 2. ปักหมุดจุดส่งปลายทาง (แยกสีตามคันรถที่ได้รับมอบหมาย)
 for d in destinations_data:
     if d["coord"]:
+        d_idx = d["index"]
+        assigned_info = dest_assigned_color_map.get(d_idx)
+        
+        if assigned_info:
+            marker_color = assigned_info["color"]
+            truck_lbl = f"รถคันที่ {assigned_info['truck_num']}"
+        else:
+            marker_color = "gray"
+            truck_lbl = "ยังไม่ได้มอบหมายรถ"
+
         folium.Marker(
             location=d["coord"],
-            popup=f"<b>จุดส่งที่ {d['index']}: {d['display']}</b><br>{d['resolved_name']}",
-            tooltip=f"📌 จุดส่งที่ {d['index']}: {d['display']}",
-            icon=folium.Icon(color="red", icon="info-sign")
+            popup=f"<b>จุดส่งที่ {d_idx}: {d['display']}</b><br>รับผิดชอบโดย: {truck_lbl}<br>{d['resolved_name']}",
+            tooltip=f"📌 จุดส่งที่ {d_idx} ({truck_lbl})",
+            icon=folium.Icon(color=marker_color, icon=str(d_idx), prefix="fa")
         ).add_to(m)
 
+# 3. วาดเส้นทาง OSRM ตามสีของรถแต่ละคัน
 for r in truck_routes_info:
     c_line = r["color"]["line"]
     if r["route_points"]:
@@ -859,4 +885,4 @@ for r in truck_routes_info:
             tooltip=f"🚚 รถคันที่ {r['truck_index']} ({r['truck_type']}) - เส้นตรง (ไม่พบ OSRM)"
         ).add_to(m)
 
-st_folium(m, width="100%", height=500, returned_objects=[])
+st_folium(m, width="100%", height=520, returned_objects=[])
