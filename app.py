@@ -36,18 +36,18 @@ HISTORY_FILE = "history_data.json"
 if "geo_cache" not in st.session_state:
     st.session_state["geo_cache"] = {}
 
-# ชุดสี Folium Supported Colors
+# ชุดสี Folium Supported Colors / Hex Colors
 ROUTE_COLORS = [
-    {"line": "#1f77b4", "marker": "blue"},
-    {"line": "#ff7f0e", "marker": "orange"},
-    {"line": "#2ca02c", "marker": "green"},
-    {"line": "#9467bd", "marker": "purple"},
-    {"line": "#d62728", "marker": "red"},
-    {"line": "#8c564b", "marker": "darkred"},
-    {"line": "#e377c2", "marker": "pink"},
-    {"line": "#7f7f7f", "marker": "gray"},
-    {"line": "#bcbd22", "marker": "cadetblue"},
-    {"line": "#17becf", "marker": "lightblue"}
+    {"line": "#1f77b4", "marker": "#1f77b4"}, # Blue
+    {"line": "#ff7f0e", "marker": "#ff7f0e"}, # Orange
+    {"line": "#2ca02c", "marker": "#2ca02c"}, # Green
+    {"line": "#9467bd", "marker": "#9467bd"}, # Purple
+    {"line": "#d62728", "marker": "#d62728"}, # Red
+    {"line": "#8c564b", "marker": "#8c564b"}, # Darkred / Brown
+    {"line": "#e377c2", "marker": "#e377c2"}, # Pink
+    {"line": "#7f7f7f", "marker": "#7f7f7f"}, # Gray
+    {"line": "#bcbd22", "marker": "#bcbd22"}, # Cadetblue / Yellow-green
+    {"line": "#17becf", "marker": "#17becf"}  # Lightblue / Cyan
 ]
 
 # --- Helper Functions ---
@@ -493,7 +493,7 @@ for i in range(int(num_trucks)):
     coords_tuple = tuple(truck_coords)
     osrm_dist_km, t_route_pts = get_multi_stop_route(coords_tuple) if len(coords_tuple) >= 2 else (0.0, [])
     
-    # แก้ไขปัญหาระยะทางขึ้น 0: Auto sync ค่าจาก OSRM เมื่อยังไม่มีข้อมูลใน Session State หรือค่านั้นเป็น 0
+    # Auto sync ค่าระยะทางจาก OSRM
     if distance_input_mode == "แยกระยะทางตามรายคัน":
         dist_key = f"truck_dist_{i}"
         if dist_key not in st.session_state or st.session_state[dist_key] == 0.0:
@@ -844,24 +844,49 @@ for o in origins_data:
             icon=folium.Icon(color="black", icon="home", prefix="fa")
         ).add_to(m)
 
-# 2. ปักหมุดจุดส่งปลายทาง (แยกสีตามคันรถที่ได้รับมอบหมาย)
+# 2. ปักหมุดจุดส่งปลายทาง (แยกสีตามคันรถ + แสดงตัวเลขลำดับจุดส่งได้ครบทุกจุด)
 for d in destinations_data:
     if d["coord"]:
         d_idx = d["index"]
         assigned_info = dest_assigned_color_map.get(d_idx)
         
         if assigned_info:
-            marker_color = assigned_info["color"]
+            bg_color = assigned_info["color"]
             truck_lbl = f"รถคันที่ {assigned_info['truck_num']}"
         else:
-            marker_color = "gray"
+            bg_color = "gray"
             truck_lbl = "ยังไม่ได้มอบหมายรถ"
+
+        # Custom Badge เพื่อรองรับตัวเลขทุกหลัก
+        icon_html = f"""
+        <div style="
+            background-color: {bg_color};
+            color: white;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 14px;
+            border: 2px solid white;
+            box-shadow: 0px 2px 6px rgba(0,0,0,0.4);
+            font-family: sans-serif;
+        ">
+            {d_idx}
+        </div>
+        """
 
         folium.Marker(
             location=d["coord"],
             popup=f"<b>จุดส่งที่ {d_idx}: {d['display']}</b><br>รับผิดชอบโดย: {truck_lbl}<br>{d['resolved_name']}",
             tooltip=f"📌 จุดส่งที่ {d_idx} ({truck_lbl})",
-            icon=folium.Icon(color=marker_color, icon=str(d_idx), prefix="fa")
+            icon=folium.DivIcon(
+                html=icon_html,
+                icon_size=(30, 30),
+                icon_anchor=(15, 15)
+            )
         ).add_to(m)
 
 # 3. วาดเส้นทาง OSRM ตามสีของรถแต่ละคัน
