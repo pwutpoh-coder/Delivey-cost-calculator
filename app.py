@@ -136,20 +136,11 @@ def get_multi_stop_route(coords_list):
 # โหลดประวัติ
 history_dict = load_history()
 
-# --- Sidebar Management ---
-st.sidebar.header("📁 จัดการประวัติและรีเซ็ตระบบ")
-
-col_reset, col_backup = st.sidebar.columns(2)
-if col_reset.button("🔄 รีเซ็ตค่า", use_container_width=True):
-    st.session_state.clear()
-    st.session_state["selected_preset_key"] = "-- เลือกรายการเพื่อโหลด --"
-    st.rerun()
-
-options_list = ["-- เลือกรายการเพื่อโหลด --"] + list(history_dict.keys())
-
-# ฟังก์ชั่นอัปเดต Session State ทั้งหมดเมื่อกดเลือกรายการ
-def apply_preset_to_session_state(preset_name):
-    data = history_dict.get(preset_name)
+# ฟังก์ชั่นอัปเดต Session State ทั้งหมดอย่างปลอดภัย
+def apply_preset_to_session_state(preset_name, data_source=None):
+    if data_source is None:
+        data_source = history_dict
+    data = data_source.get(preset_name)
     if not data:
         return
     
@@ -160,8 +151,12 @@ def apply_preset_to_session_state(preset_name):
     origins = data.get("origins", [])
     st.session_state["num_origins"] = len(origins) if origins else 1
     for idx, o in enumerate(origins):
-        st.session_state[f"origin_raw_{idx}"] = o.get("raw", "")
-        st.session_state[f"origin_cust_{idx}"] = o.get("custom_name", "")
+        if isinstance(o, dict):
+            st.session_state[f"origin_raw_{idx}"] = o.get("raw", "")
+            st.session_state[f"origin_cust_{idx}"] = o.get("custom_name", "")
+        else:
+            st.session_state[f"origin_raw_{idx}"] = str(o)
+            st.session_state[f"origin_cust_{idx}"] = ""
 
     # ดึงข้อมูลจุดจัดส่ง
     dests = data.get("destinations", [])
@@ -215,6 +210,20 @@ def apply_preset_to_session_state(preset_name):
     st.session_state["forklift_rate_per_day"] = float(data.get("forklift_rate_per_day", 0.0))
     st.session_state["forklift_driver_wage_per_day"] = float(data.get("forklift_driver_wage_per_day", 0.0))
 
+# --- Sidebar Management ---
+st.sidebar.header("📁 จัดการประวัติและรีเซ็ตระบบ")
+
+col_reset, col_backup = st.sidebar.columns(2)
+if col_reset.button("🔄 รีเซ็ตค่า", use_container_width=True):
+    st.session_state.clear()
+    st.session_state["selected_preset_key"] = "-- เลือกรายการเพื่อโหลด --"
+    st.rerun()
+
+options_list = ["-- เลือกรายการเพื่อโหลด --"] + list(history_dict.keys())
+
+if "selected_preset_key" not in st.session_state:
+    st.session_state["selected_preset_key"] = "-- เลือกรายการเพื่อโหลด --"
+
 selected_preset_name = st.sidebar.selectbox(
     "📂 เลือกรายการที่เคยบันทึกไว้", 
     options=options_list,
@@ -242,17 +251,24 @@ with st.sidebar.expander("📥 Export / Import สำรองไฟล์ปร
         use_container_width=True
     )
     
-    uploaded_file = st.file_uploader("📂 อัปโหลดไฟล์ประวัติกลับเข้ามาระบบ", type=["json"])
+    uploaded_file = st.file_uploader("📂 อัปโหลดไฟล์ประวัติกลับเข้ามาระบบ", type=["json"], key="history_uploader")
     if uploaded_file is not None:
         try:
             imported_data = json.load(uploaded_file)
-            if isinstance(imported_data, dict):
+            if isinstance(imported_data, dict) and len(imported_data) > 0:
+                # อัปเดตไฟล์ประวัติในเครื่อง
                 history_dict.update(imported_data)
                 save_history(history_dict)
-                st.success("นำเข้าข้อมูลประวัติสำเร็จ!")
+                
+                # ดึงรายการแรกที่นำเข้าเพื่อโหลดทันที
+                first_key = list(imported_data.keys())[0]
+                apply_preset_to_session_state(first_key, imported_data)
+                st.session_state["selected_preset_key"] = first_key
+                
+                st.success(f"นำเข้าข้อมูลสำเร็จ! โหลดรายการ '{first_key}' แล้ว")
                 st.rerun()
             else:
-                st.error("รูปแบบไฟล์ JSON ไม่ถูกต้อง")
+                st.error("ไฟล์ JSON ไม่มีข้อมูล หรือรูปแบบไม่ถูกต้อง")
         except Exception as e:
             st.error(f"เกิดข้อผิดพลาดในการอ่านไฟล์: {e}")
 
@@ -440,7 +456,6 @@ for i in range(int(num_trucks)):
     
     # กรณีเลือกเปิดการป้อนระยะทางแยกรายคัน
     if distance_input_mode == "แยกระยะทางตามรายคัน":
-        # กำหนดค่าเริ่มต้นให้กับ Session State จาก OSRM หากไม่มีการแก้โดยผู้ใช้
         if f"truck_dist_{i}" not in st.session_state:
             st.session_state[f"truck_dist_{i}"] = float(osrm_dist_km)
 
@@ -465,10 +480,10 @@ for i in range(int(num_trucks)):
         st.sidebar.markdown(f"**👷 เด็กยกประจำคันที่ {i+1}**")
         t_num_laborers = st.sidebar.number_input(f"จำนวนเด็กยก (คันที่ {i+1}) [คน]", min_value=0, step=1, key=f"truck_num_laborers_{i}")
         if t_num_laborers > 0:
-            t_base_wage = st.sidebar.number_input(f"ค่าแรงพื้นฐาน (คันที่ {i+1}) [บาท/คน]", min_value=0.0, step=50.0, format="%.2f", key="truck_base_wage_{i}")
-            t_early_morning_fee = st.sidebar.number_input(f"ค่าออกเช้า (คันที่ {i+1}) [บาท/คน]", min_value=0.0, step=10.0, format="%.2f", key="truck_early_morning_fee_{i}")
-            t_diligence_allowance = st.sidebar.number_input(f"ค่าเบี้ยขยัน (คันที่ {i+1}) [บาท/คน]", min_value=0.0, step=10.0, format="%.2f", key="truck_diligence_allowance_{i}")
-            t_sso_company_fee = st.sidebar.number_input(f"ค่า บ.ส่ง ประกันสังคม (คันที่ {i+1}) [บาท/คน]", min_value=0.0, step=5.0, format="%.2f", key="truck_sso_company_fee_{i}")
+            t_base_wage = st.sidebar.number_input(f"ค่าแรงพื้นฐาน (คันที่ {i+1}) [บาท/คน]", min_value=0.0, step=50.0, format="%.2f", key=f"truck_base_wage_{i}")
+            t_early_morning_fee = st.sidebar.number_input(f"ค่าออกเช้า (คันที่ {i+1}) [บาท/คน]", min_value=0.0, step=10.0, format="%.2f", key=f"truck_early_morning_fee_{i}")
+            t_diligence_allowance = st.sidebar.number_input(f"ค่าเบี้ยขยัน (คันที่ {i+1}) [บาท/คน]", min_value=0.0, step=10.0, format="%.2f", key=f"truck_diligence_allowance_{i}")
+            t_sso_company_fee = st.sidebar.number_input(f"ค่า บ.ส่ง ประกันสังคม (คันที่ {i+1}) [บาท/คน]", min_value=0.0, step=5.0, format="%.2f", key=f"truck_sso_company_fee_{i}")
         
         t_cost_per_lab = t_base_wage + t_early_morning_fee + t_diligence_allowance + t_sso_company_fee
         t_total_lab_cost = t_cost_per_lab * t_num_laborers
