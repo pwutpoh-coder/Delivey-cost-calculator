@@ -194,7 +194,7 @@ def apply_preset_to_session_state(preset_name):
         st.session_state[f"truck_sso_company_fee_{i}"] = float(t.get("sso_company_fee", 0.0))
 
     # ดึงข้อมูลเงื่อนไขต่างๆ
-    st.session_state["distance_input_mode"] = data.get("distance_input_mode", "รวมระยะทางทุกคัน")
+    st.session_state["distance_input_mode"] = data.get("distance_input_mode", "แยกระยะทางตามรายคัน")
     st.session_state["use_distance_cost"] = data.get("use_distance_cost", "ไม่อิงจากระยะทาง (คิดเหมา)")
     st.session_state["cost_per_km"] = float(data.get("cost_per_km", 0.0))
     st.session_state["base_free_km"] = float(data.get("base_free_km", 0.0))
@@ -334,7 +334,7 @@ for j in range(int(num_destinations)):
 
 dest_map = {f"จุดส่งที่ {d['index']}: {d['display']}": d for d in destinations_data}
 
-# 1.4 การตั้งค่าค่าแรงเด็กยก (ดูว่าจะตั้งแยกหรือตั้งรวม)
+# 1.4 การตั้งค่าค่าแรงเด็กยก
 st.sidebar.subheader("👷 รายละเอียดค่าแรงและสวัสดิการเด็กยก")
 labor_input_mode = st.sidebar.radio(
     "รูปแบบการระบุค่าแรงเด็กยก",
@@ -366,7 +366,7 @@ num_trucks = st.sidebar.number_input("จำนวนรถที่ใช้ (�
 st.sidebar.subheader("📏 เงื่อนไขระยะทางจัดส่ง")
 distance_input_mode = st.sidebar.radio(
     "รูปแบบการระบุระยะทาง",
-    ["รวมระยะทางทุกคัน", "แยกระยะทางตามรายคัน"],
+    ["แยกระยะทางตามรายคัน", "รวมระยะทางทุกคัน"],
     key="distance_input_mode"
 )
 
@@ -435,18 +435,26 @@ for i in range(int(num_trucks)):
         if target_dest and target_dest["coord"]:
             truck_coords.append(target_dest["coord"])
 
-    t_dist_km, t_route_pts = get_multi_stop_route(truck_coords) if len(truck_coords) >= 2 else (0.0, [])
+    # คำนวณระยะทางจาก OSRM
+    osrm_dist_km, t_route_pts = get_multi_stop_route(truck_coords) if len(truck_coords) >= 2 else (0.0, [])
     
     # กรณีเลือกเปิดการป้อนระยะทางแยกรายคัน
     if distance_input_mode == "แยกระยะทางตามรายคัน":
+        # กำหนดค่าเริ่มต้นให้กับ Session State จาก OSRM หากไม่มีการแก้โดยผู้ใช้
+        if f"truck_dist_{i}" not in st.session_state:
+            st.session_state[f"truck_dist_{i}"] = float(osrm_dist_km)
+
         t_dist_km = st.sidebar.number_input(
-            f"ระยะทางขนส่ง (คันที่ {i+1}) [กิโลเมตร]", 
+            f"ระยะทางขนส่ง คันที่ {i+1} (กิโลเมตร)", 
             min_value=0.0, 
-            value=float(t_dist_km), 
             step=1.0, 
             format="%.2f", 
             key=f"truck_dist_{i}"
         )
+        if osrm_dist_km > 0:
+            st.sidebar.caption(f"📏 ระยะทางคำนวณจากแผนที่ถนนจริง: **{osrm_dist_km:,.2f} กม.**")
+    else:
+        t_dist_km = osrm_dist_km
     
     auto_total_distance_km += t_dist_km
 
@@ -457,10 +465,10 @@ for i in range(int(num_trucks)):
         st.sidebar.markdown(f"**👷 เด็กยกประจำคันที่ {i+1}**")
         t_num_laborers = st.sidebar.number_input(f"จำนวนเด็กยก (คันที่ {i+1}) [คน]", min_value=0, step=1, key=f"truck_num_laborers_{i}")
         if t_num_laborers > 0:
-            t_base_wage = st.sidebar.number_input(f"ค่าแรงพื้นฐาน (คันที่ {i+1}) [บาท/คน]", min_value=0.0, step=50.0, format="%.2f", key=f"truck_base_wage_{i}")
-            t_early_morning_fee = st.sidebar.number_input(f"ค่าออกเช้า (คันที่ {i+1}) [บาท/คน]", min_value=0.0, step=10.0, format="%.2f", key=f"truck_early_morning_fee_{i}")
-            t_diligence_allowance = st.sidebar.number_input(f"ค่าเบี้ยขยัน (คันที่ {i+1}) [บาท/คน]", min_value=0.0, step=10.0, format="%.2f", key=f"truck_diligence_allowance_{i}")
-            t_sso_company_fee = st.sidebar.number_input(f"ค่า บ.ส่ง ประกันสังคม (คันที่ {i+1}) [บาท/คน]", min_value=0.0, step=5.0, format="%.2f", key=f"truck_sso_company_fee_{i}")
+            t_base_wage = st.sidebar.number_input(f"ค่าแรงพื้นฐาน (คันที่ {i+1}) [บาท/คน]", min_value=0.0, step=50.0, format="%.2f", key="truck_base_wage_{i}")
+            t_early_morning_fee = st.sidebar.number_input(f"ค่าออกเช้า (คันที่ {i+1}) [บาท/คน]", min_value=0.0, step=10.0, format="%.2f", key="truck_early_morning_fee_{i}")
+            t_diligence_allowance = st.sidebar.number_input(f"ค่าเบี้ยขยัน (คันที่ {i+1}) [บาท/คน]", min_value=0.0, step=10.0, format="%.2f", key="truck_diligence_allowance_{i}")
+            t_sso_company_fee = st.sidebar.number_input(f"ค่า บ.ส่ง ประกันสังคม (คันที่ {i+1}) [บาท/คน]", min_value=0.0, step=5.0, format="%.2f", key="truck_sso_company_fee_{i}")
         
         t_cost_per_lab = t_base_wage + t_early_morning_fee + t_diligence_allowance + t_sso_company_fee
         t_total_lab_cost = t_cost_per_lab * t_num_laborers
@@ -537,7 +545,12 @@ if labor_input_mode == "กำหนดแยกรายคันรถ":
 
 # 1.6 การคำนวณราคาตามระยะทาง
 st.sidebar.markdown("---")
-distance_km = st.sidebar.number_input("ระยะทางรวมทุกคัน (กิโลเมตร)", min_value=0.0, value=float(auto_total_distance_km), step=1.0, format="%.2f")
+if distance_input_mode == "แยกระยะทางตามรายคัน":
+    distance_km = auto_total_distance_km
+    st.sidebar.info(f"📊 สรุประยะทางรวมทุกคัน: **{distance_km:,.2f} กิโลเมตร**")
+else:
+    distance_km = st.sidebar.number_input("ระยะทางรวมทุกคัน (กิโลเมตร)", min_value=0.0, value=float(auto_total_distance_km), step=1.0, format="%.2f")
+
 dist_options = [
     "ไม่อิงจากระยะทาง (คิดเหมา)",
     "อิงจากระยะทาง - คิดตั้งแต่กิโลเมตรแรก",
@@ -659,9 +672,17 @@ route_summary_str = f"[{', '.join(origins_summary_list)}] ➔ " + " ➔ ".join(d
 with col1:
     breakdown_items = [
         f"เส้นทางจัดส่ง ({len(origins_data)} คลัง ➔ {len(destinations_data)} จุดส่ง): {route_summary_str}",
-        trucks_summary_str, distance_detail_str, "ค่าบริการจุดส่งเพิ่มรวมจากรถทุกคัน"
+        trucks_summary_str, distance_detail_str
     ]
-    breakdown_costs = ["-", total_base_trip_cost, distance_cost, total_extra_stop_fee]
+    breakdown_costs = ["-", total_base_trip_cost, distance_cost]
+
+    if show_sub_items and distance_input_mode == "แยกระยะทางตามรายคัน":
+        for idx, tr in enumerate(trucks_save_state):
+            breakdown_items.append(f"  └─ ระยะทางคันที่ {idx+1} ({tr['type']}): {tr['dist_km']:,.2f} กม.")
+            breakdown_costs.append("-")
+
+    breakdown_items.append("ค่าบริการจุดส่งเพิ่มรวมจากรถทุกคัน")
+    breakdown_costs.append(total_extra_stop_fee)
 
     if show_sub_items:
         if truck_stop_fees_breakdown:
@@ -744,6 +765,10 @@ with col2:
         value=f"{cost_per_tank:,.2f} ฿/ถัง",
         delta=f"ส่งทั้งหมด {num_tanks} ถัง ({num_trucks} คัน / {len(destinations_data)} จุดส่ง)",
         delta_color="off"
+    )
+    st.metric(
+        label="📏 ระยะทางจัดส่งรวมทุกคัน",
+        value=f"{distance_km:,.2f} กม."
     )
 
 st.markdown("---")
