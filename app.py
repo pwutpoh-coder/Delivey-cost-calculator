@@ -210,6 +210,13 @@ def apply_preset_to_session_state(preset_name, data_source=None):
     st.session_state["forklift_rate_per_day"] = float(data.get("forklift_rate_per_day", 0.0))
     st.session_state["forklift_driver_wage_per_day"] = float(data.get("forklift_driver_wage_per_day", 0.0))
 
+# --- จัดการ Pending Preset Key ก่อนที่ Widget Selectbox จะถูกสร้างขึ้น ---
+if "pending_preset_key" in st.session_state:
+    st.session_state["selected_preset_key"] = st.session_state.pop("pending_preset_key")
+
+if "selected_preset_key" not in st.session_state:
+    st.session_state["selected_preset_key"] = "-- เลือกรายการเพื่อโหลด --"
+
 # --- Sidebar Management ---
 st.sidebar.header("📁 จัดการประวัติและรีเซ็ตระบบ")
 
@@ -221,7 +228,8 @@ if col_reset.button("🔄 รีเซ็ตค่า", use_container_width=True
 
 options_list = ["-- เลือกรายการเพื่อโหลด --"] + list(history_dict.keys())
 
-if "selected_preset_key" not in st.session_state:
+# ตรวจสอบว่าคีย์ที่เลือกยังคงอยู่ในตัวเลือกหรือไม่
+if st.session_state["selected_preset_key"] not in options_list:
     st.session_state["selected_preset_key"] = "-- เลือกรายการเพื่อโหลด --"
 
 selected_preset_name = st.sidebar.selectbox(
@@ -236,7 +244,7 @@ if selected_preset_name != "-- เลือกรายการเพื่อ�
     if selected_preset_name in history_dict:
         del history_dict[selected_preset_name]
         save_history(history_dict)
-        st.session_state["selected_preset_key"] = "-- เลือกรายการเพื่อโหลด --"
+        st.session_state["pending_preset_key"] = "-- เลือกรายการเพื่อโหลด --"
         st.sidebar.warning(f"ลบรายการ '{selected_preset_name}' แล้ว")
         st.rerun()
 
@@ -263,8 +271,9 @@ with st.sidebar.expander("📥 Export / Import สำรองไฟล์ปร
                 # ดึงรายการแรกที่นำเข้าเพื่อโหลดทันที
                 first_key = list(imported_data.keys())[0]
                 apply_preset_to_session_state(first_key, imported_data)
-                st.session_state["selected_preset_key"] = first_key
                 
+                # ตั้งค่าคีย์รอการปรับเปลี่ยน แล้วทำการ rerun อย่างปลอดภัย
+                st.session_state["pending_preset_key"] = first_key
                 st.success(f"นำเข้าข้อมูลสำเร็จ! โหลดรายการ '{first_key}' แล้ว")
                 st.rerun()
             else:
@@ -658,7 +667,7 @@ if st.sidebar.button("💾 บันทึกข้อมูลนี้", use_c
             "forklift_driver_wage_per_day": forklift_driver_wage_per_day
         }
         save_history(history_dict)
-        st.session_state["selected_preset_key"] = save_preset_name.strip()
+        st.session_state["pending_preset_key"] = save_preset_name.strip()
         st.sidebar.success(f"บันทึกรายการ '{save_preset_name.strip()}' สำเร็จ!")
         st.rerun()
 
@@ -720,138 +729,123 @@ with col1:
                 f"  └─ ค่า บ.ส่ง ประกันสังคม ({num_laborers} คน x {sso_company_fee:,.2f} ฿)",
             ])
             breakdown_costs.extend([
-                base_wage * num_laborers, early_morning_fee * num_laborers,
-                diligence_allowance * num_laborers, sso_company_fee * num_laborers,
+                base_wage * num_laborers,
+                early_morning_fee * num_laborers,
+                diligence_allowance * num_laborers,
+                sso_company_fee * num_laborers
             ])
         else:
             for idx, tr in enumerate(trucks_save_state):
-                nl = tr["num_laborers"]
-                if nl > 0:
-                    t_c = (tr["base_wage"] + tr["early_morning_fee"] + tr["diligence_allowance"] + tr["sso_company_fee"]) * nl
-                    breakdown_items.append(f"  └─ คันที่ {idx+1} ({tr['type']}): เด็กยก {nl} คน (รวม {t_c:,.2f} ฿)")
-                    breakdown_costs.append(t_c)
+                tr_lab_count = tr.get("num_laborers", 0)
+                tr_lab_cost = (
+                    tr.get("base_wage", 0.0) + tr.get("early_morning_fee", 0.0) +
+                    tr.get("diligence_allowance", 0.0) + tr.get("sso_company_fee", 0.0)
+                ) * tr_lab_count
+                breakdown_items.append(f"  └─ คันที่ {idx+1} ({tr['type']}): เด็กยก {tr_lab_count} คน")
+                breakdown_costs.append(tr_lab_cost)
 
-    breakdown_items.append(f"ค่ายกถัง ({num_tanks} ถัง x {lifting_fee_per_tank:,.2f} ฿)")
+    breakdown_items.append(f"ค่ายกถังรวม ({num_tanks} ถัง x {lifting_fee_per_tank:,.2f} ฿/ถัง)")
     breakdown_costs.append(total_lifting_fee)
 
     if use_forklift:
-        if forklift_mode == "ค่าเช่ารวมคนขับ":
-            forklift_str = f"ค่าเช่ารถโฟล์คลิฟท์รวมคนขับ ({num_forklifts} คัน x {forklift_days} วัน @ {forklift_rate_per_day:,.2f} ฿/วัน)"
-            breakdown_items.append(forklift_str)
-            breakdown_costs.append(total_forklift_cost)
-        else:
-            forklift_str = f"ค่าบริการรถโฟล์คลิฟท์รวม ({num_forklifts} คัน x {forklift_days} วัน)"
-            breakdown_items.append(forklift_str)
-            breakdown_costs.append(total_forklift_cost)
+        forklift_title = f"ค่าเช่าโฟล์คลิฟท์รวม ({num_forklifts} คัน x {forklift_days} วัน) - {forklift_mode}"
+        breakdown_items.append(forklift_title)
+        breakdown_costs.append(total_forklift_cost)
 
-            if show_sub_items:
-                breakdown_items.extend([
-                    f"  └─ ค่าเช่ารถโฟล์คลิฟท์ ({num_forklifts} คัน x {forklift_days} วัน @ {forklift_rate_per_day:,.2f} ฿/วัน)",
-                    f"  └─ ค่าแรงคนขับโฟล์คลิฟท์ ({num_forklifts} คน x {forklift_days} วัน @ {forklift_driver_wage_per_day:,.2f} ฿/วัน)"
-                ])
-                breakdown_costs.extend([forklift_rental_cost, forklift_driver_cost])
-    else:
-        breakdown_items.append("ค่าเช่ารถโฟล์คลิฟท์ (ไม่ได้ใช้งาน)")
-        breakdown_costs.append(0.0)
+        if show_sub_items:
+            if forklift_mode == "ค่าเช่ารวมคนขับ":
+                breakdown_items.append(f"  └─ ค่าเช่ารวมคนขับ ({num_forklifts} คัน x {forklift_days} วัน @ {forklift_rate_per_day:,.2f} ฿)")
+                breakdown_costs.append(forklift_rental_cost)
+            else:
+                breakdown_items.append(f"  └─ ค่าเช่ารถโฟล์คลิฟท์ ({num_forklifts} คัน x {forklift_days} วัน @ {forklift_rate_per_day:,.2f} ฿)")
+                breakdown_costs.append(forklift_rental_cost)
+                breakdown_items.append(f"  └─ ค่าแรงคนขับโฟล์คลิฟท์ ({num_forklifts} คน x {forklift_days} วัน @ {forklift_driver_wage_per_day:,.2f} ฿)")
+                breakdown_costs.append(forklift_driver_cost)
 
-    breakdown_items.append("รวมค่าขนส่งสุทธิ")
-    breakdown_costs.append(total_shipping_cost)
-
-    formatted_costs, formatted_per_tank = [], []
+    # แปลงรูปแบบแสดงผลตัวเลขใน DataFrame
+    formatted_costs = []
     for c in breakdown_costs:
         if isinstance(c, (int, float)):
             formatted_costs.append(f"{c:,.2f}")
-            formatted_per_tank.append(f"{c / num_tanks:,.2f}" if num_tanks > 0 else "0.00")
         else:
             formatted_costs.append(str(c))
-            formatted_per_tank.append("-")
 
     df_breakdown = pd.DataFrame({
-        "รายการ": breakdown_items,
-        "จำนวนเงินรวม (บาท)": formatted_costs,
-        "ราคาต่อถัง (บาท/ถัง)": formatted_per_tank
+        "รายการคำนวณ": breakdown_items,
+        "จำนวนเงิน (บาท)": formatted_costs
     })
-    st.dataframe(df_breakdown, use_container_width=True, hide_index=True)
+    
+    st.table(df_breakdown)
 
 with col2:
-    st.metric(label="🎯 ค่าขนส่งรวมทั้งหมด", value=f"{total_shipping_cost:,.2f} บาท")
-    st.metric(
-        label="🏷️ ค่าขนส่งต่อถัง (เฉลี่ยรวม)", 
-        value=f"{cost_per_tank:,.2f} ฿/ถัง",
-        delta=f"ส่งทั้งหมด {num_tanks} ถัง ({num_trucks} คัน / {len(destinations_data)} จุดส่ง)",
-        delta_color="off"
-    )
-    st.metric(
-        label="📏 ระยะทางจัดส่งรวมทุกคัน",
-        value=f"{distance_km:,.2f} กม."
-    )
+    st.metric(label="🚚 ค่าขนส่งรวมทั้งหมด", value=f"{total_shipping_cost:,.2f} บาท")
+    st.metric(label="📦 เฉลี่ยค่าขนส่งต่อถัง", value=f"{cost_per_tank:,.2f} บาท/ถัง")
+    st.metric(label="📍 ระยะทางรวมทั้งหมด", value=f"{distance_km:,.2f} กม.")
+    st.metric(label="📦 จำนวนถังรวม", value=f"{num_tanks:,} ถัง")
 
+# --- ส่วนที่ 4: แสดงผลแผนที่ Folium ---
 st.markdown("---")
+st.markdown("### 🗺️ แผนที่เส้นทางจัดส่งสินค้า")
 
-# --- ส่วนที่ 4: แสดงผลแผนที่ ---
-st.markdown("<h3 style='margin-bottom: 0.8rem;'>🗺️ 2. แผนที่แสดงจุดจัดส่งและเส้นทางถนนจริง (แยกสีตามคันรถ)</h3>", unsafe_allow_html=True)
+# คำนวณพิกัดกลางเพื่อสร้างศูนย์กลางแผนที่
+all_valid_coords = []
+for o in origins_data:
+    if o["coord"]:
+        all_valid_coords.append(o["coord"])
+for d in destinations_data:
+    if d["coord"]:
+        all_valid_coords.append(d["coord"])
 
-all_valid_coords = [o["coord"] for o in origins_data if o["coord"]]
-all_valid_coords.extend([d["coord"] for d in destinations_data if d["coord"]])
-
-if len(all_valid_coords) >= 1:
+if all_valid_coords:
     avg_lat = sum(c[0] for c in all_valid_coords) / len(all_valid_coords)
     avg_lon = sum(c[1] for c in all_valid_coords) / len(all_valid_coords)
-    zoom_level = 9
+    map_center = [avg_lat, avg_lon]
+    zoom_level = 10
 else:
-    avg_lat, avg_lon, zoom_level = 13.7563, 100.5018, 6
+    map_center = [13.7563, 100.5018]  # กรุงเทพมหานครเป็นค่าเริ่มต้น
+    zoom_level = 6
 
-m = folium.Map(location=[avg_lat, avg_lon], zoom_start=zoom_level)
+m = folium.Map(location=map_center, zoom_start=zoom_level)
 
-# วาด Marker คลัง/จุดต้นทางทั้งหมด
+# ปักหมุดคลังสินค้า/จุดต้นทาง
 for o in origins_data:
     if o["coord"]:
         folium.Marker(
-            o["coord"], 
-            popup=f"คลังที่ {o['index']}: {o['display']}", 
-            tooltip=f"🏢 ต้นทาง/คลังที่ {o['index']}: {o['display']}", 
-            icon=folium.Icon(color="black", icon="play", prefix="fa")
+            location=o["coord"],
+            popup=f"<b>คลังที่ {o['index']}: {o['display']}</b><br>{o['resolved_name']}",
+            tooltip=f"🏢 คลังที่ {o['index']}: {o['display']}",
+            icon=folium.Icon(color="black", icon="home", prefix="fa")
         ).add_to(m)
 
-# วาดเส้นทางและหมุดสำหรับแต่ละคัน
-for t_info in truck_routes_info:
-    t_idx = t_info["truck_index"]
-    t_type = t_info["truck_type"]
-    color_line = t_info["color"]["line"]
-    color_marker = t_info["color"]["marker"]
-    
-    if t_info["route_points"]:
-        folium.PolyLine(
-            t_info["route_points"], 
-            color=color_line, weight=5, opacity=0.8, 
-            tooltip=f"คันที่ {t_idx} ({t_type}): {t_info['distance_km']:,.2f} กม."
-        ).add_to(m)
-    elif len(t_info["coords"]) >= 2:
-        folium.PolyLine(
-            t_info["coords"], 
-            color=color_line, weight=3, opacity=0.5, dash_array="5, 10",
-            tooltip=f"คันที่ {t_idx} ({t_type}) - เส้นตรงจำลอง"
-        ).add_to(m)
-
-    for stop_item in t_info["assigned_stops"]:
-        if stop_item["coord"]:
-            folium.Marker(
-                stop_item["coord"], 
-                popup=f"รถคันที่ {t_idx} ({t_type}) <br>จุดส่งที่ {stop_item['index']}: {stop_item['display']}", 
-                tooltip=f"คันที่ {t_idx} ➔ จุดส่งที่ {stop_item['index']}: {stop_item['display']}", 
-                icon=folium.Icon(color=color_marker, icon="flag")
-            ).add_to(m)
-
-assigned_dest_indices = {s["index"] for t_info in truck_routes_info for s in t_info["assigned_stops"]}
-
-# แสดงจุดส่งที่ยังไม่ได้มอบหมายรถ
+# ปักหมุดจุดส่งปลายทาง
 for d in destinations_data:
-    if d["index"] not in assigned_dest_indices and d["coord"]:
+    if d["coord"]:
         folium.Marker(
-            d["coord"], 
-            popup=f"ยังไม่ได้มอบหมายรถ <br>จุดส่งที่ {d['index']}: {d['display']}", 
-            tooltip=f"⚠️ ยังไม่ได้เลือก คันที่จะส่งจุดที่ {d['index']}", 
-            icon=folium.Icon(color="gray", icon="info-sign")
+            location=d["coord"],
+            popup=f"<b>จุดส่งที่ {d['index']}: {d['display']}</b><br>{d['resolved_name']}",
+            tooltip=f"📌 จุดส่งที่ {d['index']}: {d['display']}",
+            icon=folium.Icon(color="red", icon="info-sign")
         ).add_to(m)
 
-st_folium(m, width="100%", height=400)
+# วาดเส้นทางสำหรับรถแต่ละคัน
+for r in truck_routes_info:
+    c_line = r["color"]["line"]
+    if r["route_points"]:
+        folium.PolyLine(
+            locations=r["route_points"],
+            color=c_line,
+            weight=5,
+            opacity=0.8,
+            tooltip=f"🚚 รถคันที่ {r['truck_index']} ({r['truck_type']}) - {r['distance_km']:,.2f} กม."
+        ).add_to(m)
+    elif len(r["coords"]) >= 2:
+        folium.PolyLine(
+            locations=r["coords"],
+            color=c_line,
+            weight=3,
+            opacity=0.5,
+            dash_array="5, 10",
+            tooltip=f"🚚 รถคันที่ {r['truck_index']} ({r['truck_type']}) - เส้นตรง (ไม่พบ OSRM)"
+        ).add_to(m)
+
+st_folium(m, width="100%", height=500, returned_objects=[])
